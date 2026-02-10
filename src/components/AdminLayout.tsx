@@ -1,5 +1,5 @@
-import React from "react";
-import { useAuth } from "../providers/AuthProviders";
+import React from 'react';
+import { useAuth } from '../providers/AuthProviders';
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
   const { user, signOut } = useAuth();
@@ -26,7 +26,7 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
             </span>
             <button
               onClick={signOut}
-              className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
+              className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99] cursor-pointer"
             >
               Salir
             </button>
