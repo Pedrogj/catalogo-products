@@ -1,38 +1,23 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { AdminLoginPage } from '../pages/AdminLoginPage';
-import { AdminRegisterPage } from '../pages/AdminRegisterPage';
-import { ProtectedRoute } from './ProtectedRoute';
-import { AdminLayout } from '../components/AdminLayout';
-import { AdminDashboardPage } from '../pages/AdminDashboardPage';
-import { CatalogPage } from '../pages/CatalogPage';
-import { AdminCategoriesPage } from '../pages/AdminCategoriesPage';
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AdminLoginPage } from "../pages/AdminLoginPage";
+import { AdminRegisterPage } from "../pages/AdminRegisterPage";
+import { ProtectedRoute } from "./ProtectedRoute";
+import { AdminLayout } from "../components/AdminLayout";
+import { AdminDashboardPage } from "../pages/AdminDashboardPage";
+import { CatalogPage } from "../pages/CatalogPage";
+import { AdminCategoriesPage } from "../pages/AdminCategoriesPage";
+import { AdminProductsPage } from "../pages/AdminProductsPage";
+import { AdminSettingsPage } from "../pages/AdminSettingsPage";
 
 export function AppRouter() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route
-          path="/"
-          element={
-            <Navigate
-              to="/admin/login"
-              replace
-            />
-          }
-        />
+        <Route path="/" element={<Navigate to="/admin/login" replace />} />
 
-        <Route
-          path="/t/:slug"
-          element={<CatalogPage />}
-        />
-        <Route
-          path="/admin/login"
-          element={<AdminLoginPage />}
-        />
-        <Route
-          path="/admin/register"
-          element={<AdminRegisterPage />}
-        />
+        <Route path="/t/:slug" element={<CatalogPage />} />
+        <Route path="/admin/login" element={<AdminLoginPage />} />
+        <Route path="/admin/register" element={<AdminRegisterPage />} />
 
         <Route element={<ProtectedRoute />}>
           <Route
@@ -48,6 +33,22 @@ export function AppRouter() {
             element={
               <AdminLayout>
                 <AdminCategoriesPage />
+              </AdminLayout>
+            }
+          />
+          <Route
+            path="/admin/products"
+            element={
+              <AdminLayout>
+                <AdminProductsPage />
+              </AdminLayout>
+            }
+          />
+          <Route
+            path="/admin/settings"
+            element={
+              <AdminLayout>
+                <AdminSettingsPage />
               </AdminLayout>
             }
           />

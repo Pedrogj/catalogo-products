@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from "react";
 
-import { useMyTenant } from '../hooks/useMyTenant';
-import { useAuth } from '../providers/AuthProviders';
-import { supabase } from '../supabase/supabaseClient';
+import { useMyTenant } from "../hooks/useMyTenant";
+import { useAuth } from "../providers/AuthProviders";
+import { supabase } from "../supabase/supabaseClient";
 
 type Category = {
   id: string;
@@ -17,12 +17,13 @@ export function AdminCategoriesPage() {
   const { tenant, loading: tenantLoading } = useMyTenant(user?.id);
 
   const [items, setItems] = useState<Category[]>([]);
-  const [name, setName] = useState('');
+  const [name, setName] = useState("");
   const [sortOrder, setSortOrder] = useState<number>(0);
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [orderDraft, setOrderDraft] = useState<Record<string, number>>({});
 
   const canUse = useMemo(() => !!tenant?.id, [tenant?.id]);
 
@@ -33,11 +34,11 @@ export function AdminCategoriesPage() {
     setError(null);
 
     const { data, error } = await supabase
-      .from('categories')
-      .select('id,tenant_id,name,sort_order,is_active')
-      .eq('tenant_id', tenant.id)
-      .order('sort_order', { ascending: true })
-      .order('created_at', { ascending: true });
+      .from("categories")
+      .select("id,tenant_id,name,sort_order,is_active")
+      .eq("tenant_id", tenant.id)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
 
     setLoading(false);
 
@@ -47,6 +48,11 @@ export function AdminCategoriesPage() {
     }
 
     setItems((data as Category[]) ?? []);
+    const nextDraft: Record<string, number> = {};
+    (data as Category[] | null)?.forEach((c) => {
+      nextDraft[c.id] = c.sort_order;
+    });
+    setOrderDraft(nextDraft);
   };
 
   useEffect(() => {
@@ -69,30 +75,30 @@ export function AdminCategoriesPage() {
       is_active: true,
     };
 
-    const { error } = await supabase.from('categories').insert(payload);
+    const { error } = await supabase.from("categories").insert(payload);
 
     setLoading(false);
 
     if (error) {
       // por tu índice unique (tenant_id, lower(name))
-      if (error.message.toLowerCase().includes('duplicate')) {
-        setError('Ya existe una categoría con ese nombre.');
+      if (error.message.toLowerCase().includes("duplicate")) {
+        setError("Ya existe una categoría con ese nombre.");
         return;
       }
       setError(error.message);
       return;
     }
 
-    setName('');
+    setName("");
     setSortOrder(0);
-    setMsg('Categoría creada ✅');
+    setMsg("Categoría creada ✅");
     await load();
   };
 
   const onDelete = async (id: string) => {
     if (!tenant?.id) return;
 
-    const ok = confirm('¿Eliminar esta categoría?');
+    const ok = confirm("¿Eliminar esta categoría?");
     if (!ok) return;
 
     setLoading(true);
@@ -100,10 +106,10 @@ export function AdminCategoriesPage() {
     setMsg(null);
 
     const { error } = await supabase
-      .from('categories')
+      .from("categories")
       .delete()
-      .eq('id', id)
-      .eq('tenant_id', tenant.id);
+      .eq("id", id)
+      .eq("tenant_id", tenant.id);
 
     setLoading(false);
 
@@ -112,7 +118,33 @@ export function AdminCategoriesPage() {
       return;
     }
 
-    setMsg('Categoría eliminada ✅');
+    setMsg("Categoría eliminada ✅");
+    await load();
+  };
+
+  const onSaveOrder = async (id: string) => {
+    if (!tenant?.id) return;
+
+    const newOrder = Number(orderDraft[id] ?? 0);
+
+    setLoading(true);
+    setError(null);
+    setMsg(null);
+
+    const { error } = await supabase
+      .from("categories")
+      .update({ sort_order: newOrder })
+      .eq("id", id)
+      .eq("tenant_id", tenant.id);
+
+    setLoading(false);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    setMsg("Orden actualizado ✅");
     await load();
   };
 
@@ -146,10 +178,7 @@ export function AdminCategoriesPage() {
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
         <h2 className="text-base font-semibold">Crear categoría</h2>
 
-        <form
-          onSubmit={onCreate}
-          className="mt-4 grid gap-3 sm:grid-cols-3"
-        >
+        <form onSubmit={onCreate} className="mt-4 grid gap-3 sm:grid-cols-3">
           <div className="sm:col-span-2">
             <label className="text-sm font-medium text-gray-700">Nombre</label>
             <input
@@ -188,7 +217,7 @@ export function AdminCategoriesPage() {
               disabled={loading || name.trim().length < 2}
               className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99]"
             >
-              {loading ? 'Guardando...' : 'Crear'}
+              {loading ? "Guardando..." : "Crear"}
             </button>
           </div>
         </form>
@@ -211,26 +240,58 @@ export function AdminCategoriesPage() {
           </div>
         ) : (
           <div className="mt-4 grid gap-2">
-            {items.map((c) => (
-              <div
-                key={c.id}
-                className="flex items-center justify-between gap-3 rounded-2xl border p-4"
-              >
-                <div>
-                  <div className="font-medium">{c.name}</div>
-                  <div className="text-xs text-gray-500">
-                    Orden: {c.sort_order}
+            {items.map((c) => {
+              const isDirty =
+                (orderDraft[c.id] ?? c.sort_order) !== c.sort_order;
+
+              return (
+                <div
+                  key={c.id}
+                  className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border p-4"
+                >
+                  <div>
+                    <div className="font-medium">{c.name}</div>
+                    <div className="text-xs text-gray-500">
+                      Orden actual: {c.sort_order}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-gray-600">Nuevo</span>
+                      <input
+                        type="number"
+                        className="w-24 rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
+                        value={orderDraft[c.id] ?? c.sort_order}
+                        onChange={(e) =>
+                          setOrderDraft((prev) => ({
+                            ...prev,
+                            [c.id]: Number(e.target.value),
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => onSaveOrder(c.id)}
+                      disabled={loading || !isDirty}
+                      className="rounded-xl bg-black px-3 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
+                    >
+                      Guardar
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onDelete(c.id)}
+                      className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
+                    >
+                      Eliminar
+                    </button>
                   </div>
                 </div>
-
-                <button
-                  onClick={() => onDelete(c.id)}
-                  className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
-                >
-                  Eliminar
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
