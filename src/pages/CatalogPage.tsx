@@ -3,7 +3,10 @@ import { useParams } from 'react-router-dom';
 import {
   fetchCategoriesByTenant,
   fetchTenantBySlug,
+  fetchProductsByTenant,
 } from '../api/catalog/catalog.api';
+import { useCart } from '../context/CartContext';
+import { CartFloatingBar } from '../components/CartFloatingBar';
 
 type TenantLite = {
   id: string;
@@ -28,12 +31,32 @@ type CategoryLite = {
   is_active: boolean;
 };
 
+type ProductLite = {
+  id: string;
+  name: string;
+  description: string | null;
+  base_price: number;
+  category_id: string | null;
+  is_active: boolean;
+  is_sold_out: boolean;
+};
+
 export function CatalogPage() {
   const { slug } = useParams();
   const [tenant, setTenant] = useState<TenantLite | null>(null);
   const [categories, setCategories] = useState<CategoryLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [products, setProducts] = useState<ProductLite[]>([]);
+
+  const { addItem, setStoreKey } = useCart();
+
+  const uncategorized = products.filter((p) => !p.category_id);
+
+  useEffect(() => {
+    setStoreKey(slug ?? null);
+    return () => setStoreKey(null);
+  }, [slug]);
 
   useEffect(() => {
     const run = async () => {
@@ -70,15 +93,32 @@ export function CatalogPage() {
 
       const { data: categoriesData, error: categoriesError } =
         await fetchCategoriesByTenant(tenantData.id);
-
       if (categoriesError) {
         setError(categoriesError.message);
         setCategories([]);
+        setProducts([]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: productsData, error: productsError } =
+        await fetchProductsByTenant(tenantData.id);
+      if (productsError) {
+        setError(productsError.message);
+        setCategories((categoriesData as CategoryLite[]) ?? []);
+        setProducts([]);
         setLoading(false);
         return;
       }
 
       setCategories((categoriesData as CategoryLite[]) ?? []);
+      setProducts(
+        ((productsData as ProductLite[]) ?? []).map((p) => ({
+          ...p,
+          base_price: Number(p.base_price ?? 0),
+        })),
+      );
+
       setLoading(false);
     };
 
@@ -218,21 +258,136 @@ export function CatalogPage() {
             </div>
           ) : (
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {categories.map((c) => (
-                <div
-                  key={c.id}
-                  className="rounded-2xl border bg-white p-5 shadow-sm"
-                >
-                  <div className="font-medium">{c.name}</div>
-                  <div className="mt-1 text-sm text-gray-600">
-                    Pronto: productos de esta categoría
+              {categories.map((c) => {
+                const items = products.filter((p) => p.category_id === c.id);
+
+                return (
+                  <div
+                    key={c.id}
+                    className="rounded-2xl border bg-white p-5 shadow-sm"
+                  >
+                    <div className="flex items-baseline justify-between gap-3">
+                      <div className="font-semibold">{c.name}</div>
+                      <div className="text-xs text-gray-500">
+                        {items.length} productos
+                      </div>
+                    </div>
+
+                    {items.length === 0 ? (
+                      <div className="mt-3 text-sm text-gray-600">
+                        Aún no hay productos en esta categoría.
+                      </div>
+                    ) : (
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                        {items.map((p) => (
+                          <div
+                            key={p.id}
+                            className="rounded-2xl border p-4"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="font-medium truncate">
+                                  {p.name}
+                                </div>
+                                {p.description && (
+                                  <div className="mt-1 text-sm text-gray-600">
+                                    {p.description}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="text-right">
+                                <div className="font-semibold">
+                                  ${p.base_price}
+                                </div>
+                                {p.is_sold_out && (
+                                  <div className="mt-1 text-xs text-red-600">
+                                    Agotado
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              disabled={p.is_sold_out}
+                              onClick={() =>
+                                addItem({
+                                  productId: p.id,
+                                  name: p.name,
+                                  price: p.base_price,
+                                })
+                              }
+                              className="mt-3 w-full rounded-xl bg-black px-3 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
+                            >
+                              Agregar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
+                );
+              })}
+            </div>
+          )}
+          {uncategorized.length > 0 && (
+            <div className="mt-4 rounded-2xl border bg-white p-5 shadow-sm">
+              <div className="flex items-baseline justify-between gap-3">
+                <div className="font-semibold">Otros</div>
+                <div className="text-xs text-gray-500">
+                  {uncategorized.length} productos
                 </div>
-              ))}
+              </div>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                {uncategorized.map((p) => (
+                  <div
+                    key={p.id}
+                    className="rounded-2xl border p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{p.name}</div>
+                        {p.description && (
+                          <div className="mt-1 text-sm text-gray-600">
+                            {p.description}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="text-right">
+                        <div className="font-semibold">${p.base_price}</div>
+                        {p.is_sold_out && (
+                          <div className="mt-1 text-xs text-red-600">
+                            Agotado
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={p.is_sold_out}
+                      onClick={() =>
+                        addItem({
+                          productId: p.id,
+                          name: p.name,
+                          price: p.base_price,
+                        })
+                      }
+                      className="mt-3 w-full rounded-xl bg-black px-3 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
+                    >
+                      Agregar
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </section>
       </main>
+      <CartFloatingBar />
     </div>
   );
 }

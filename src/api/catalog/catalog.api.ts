@@ -19,3 +19,12 @@ export async function fetchCategoriesByTenant(tenantId: string) {
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: true });
 }
+
+export async function fetchProductsByTenant(tenantId: string) {
+  return supabase
+    .from('products')
+    .select('id,name,description,base_price,category_id,is_active,is_sold_out')
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true)
+    .order('created_at', { ascending: false });
+}
