@@ -128,3 +128,35 @@ Crea `.env`:
 VITE_SUPABASE_URL=...
 VITE_SUPABASE_ANON_KEY=...
 ```
+
+Supabase: Esquema DB (tablas)
+
+- tenants
+- tenant_members
+- categories
+- products
+- product_images
+- option_groups
+- options
+
+Notas de modelo
+
+- products.category_id puede ser null (va a “Otros” en catálogo)
+- product_images se usa para guardar URLs + sort_order (primera = principal)
+- option_groups y options soportan modificadores y delta de precio
+
+Supabase Storage (imágenes)
+
+- Bucket:
+- product-images
+- Convención de path:
+- tenantId/productId/<uuid>.<ext>
+- Se guarda URL pública en product_images.url.
+
+RLS (Row Level Security)
+
+- RLS habilitado en todas las tablas.
+- Políticas:
+  Admin escribe si es miembro (is_tenant_member(tenant_id))
+  Público puede leer catálogo si tenant activo (MVP)
+  (Si aplica) Público puede leer tenant por slug si está activo
