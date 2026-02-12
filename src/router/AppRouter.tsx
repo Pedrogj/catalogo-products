@@ -10,6 +10,7 @@ import { AdminProductsPage } from '../pages/AdminProductsPage';
 import { AdminSettingsPage } from '../pages/AdminSettingsPage';
 import { CartPage } from '../pages/CartPage';
 import { CheckoutPage } from '../pages/CheckoutPage';
+import { AdminProductOptionsPage } from '../pages/AdminProductOptionPage';
 
 export function AppRouter() {
   return (
@@ -69,6 +70,14 @@ export function AppRouter() {
             element={
               <AdminLayout>
                 <AdminProductsPage />
+              </AdminLayout>
+            }
+          />
+          <Route
+            path="/admin/products/:productId/options"
+            element={
+              <AdminLayout>
+                <AdminProductOptionsPage />
               </AdminLayout>
             }
           />

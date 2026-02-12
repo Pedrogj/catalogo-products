@@ -23,7 +23,9 @@ export async function fetchCategoriesByTenant(tenantId: string) {
 export async function fetchProductsByTenant(tenantId: string) {
   return supabase
     .from('products')
-    .select('id,name,description,base_price,category_id,is_active,is_sold_out')
+    .select(
+      'id,name,description,base_price,category_id,is_active,is_sold_out,product_images(url, sort_order)',
+    )
     .eq('tenant_id', tenantId)
     .eq('is_active', true)
     .order('created_at', { ascending: false });

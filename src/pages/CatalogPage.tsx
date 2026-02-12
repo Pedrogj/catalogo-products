@@ -7,6 +7,7 @@ import {
 } from '../api/catalog/catalog.api';
 import { useCart } from '../context/CartContext';
 import { CartFloatingBar } from '../components/CartFloatingBar';
+import { ProductCard } from '../components/ProductCard';
 
 type TenantLite = {
   id: string;
@@ -39,6 +40,7 @@ type ProductLite = {
   category_id: string | null;
   is_active: boolean;
   is_sold_out: boolean;
+  product_images?: { url: string; sort_order: number }[] | null;
 };
 
 export function CatalogPage() {
@@ -264,13 +266,13 @@ export function CatalogPage() {
                 return (
                   <div
                     key={c.id}
-                    className="rounded-2xl border bg-white p-5 shadow-sm"
+                    className="rounded-2xl bg-white p-5 shadow-sm border"
                   >
-                    <div className="flex items-baseline justify-between gap-3">
-                      <div className="font-semibold">{c.name}</div>
-                      <div className="text-xs text-gray-500">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-base font-semibold">{c.name}</h2>
+                      <span className="text-xs text-gray-500">
                         {items.length} productos
-                      </div>
+                      </span>
                     </div>
 
                     {items.length === 0 ? (
@@ -278,52 +280,33 @@ export function CatalogPage() {
                         Aún no hay productos en esta categoría.
                       </div>
                     ) : (
-                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                        {items.map((p) => (
-                          <div
-                            key={p.id}
-                            className="rounded-2xl border p-4"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="font-medium truncate">
-                                  {p.name}
-                                </div>
-                                {p.description && (
-                                  <div className="mt-1 text-sm text-gray-600">
-                                    {p.description}
-                                  </div>
-                                )}
-                              </div>
+                      <div className="mt-4 grid gap-3">
+                        {items.map((p) => {
+                          const imgUrl =
+                            (p.product_images ?? [])
+                              ?.slice()
+                              ?.sort(
+                                (a, b) =>
+                                  (a.sort_order ?? 0) - (b.sort_order ?? 0),
+                              )[0]?.url ?? null;
 
-                              <div className="text-right">
-                                <div className="font-semibold">
-                                  ${p.base_price}
-                                </div>
-                                {p.is_sold_out && (
-                                  <div className="mt-1 text-xs text-red-600">
-                                    Agotado
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-
-                            <button
-                              type="button"
-                              disabled={p.is_sold_out}
-                              onClick={() =>
+                          return (
+                            <ProductCard
+                              name={p.name}
+                              description={p.description}
+                              price={p.base_price}
+                              imgUrl={imgUrl}
+                              soldOut={p.is_sold_out}
+                              onAdd={() =>
                                 addItem({
                                   productId: p.id,
                                   name: p.name,
                                   price: p.base_price,
                                 })
                               }
-                              className="mt-3 w-full rounded-xl bg-black px-3 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
-                            >
-                              Agregar
-                            </button>
-                          </div>
-                        ))}
+                            />
+                          );
+                        })}
                       </div>
                     )}
                   </div>

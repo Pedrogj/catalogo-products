@@ -3,11 +3,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useMyTenant } from '../hooks/useMyTenant';
 import { useAuth } from '../providers/AuthProviders';
 import { supabase } from '../supabase/supabaseClient';
+import { addImageRow, uploadProductImage } from '../helpers/uploadImage';
+import { Link } from 'react-router-dom';
 
 type Category = { id: string; name: string; sort_order: number };
 type Product = {
   id: string;
   name: string;
+  description: string | null;
   base_price: number;
   category_id: string | null;
   is_active: boolean;
@@ -24,12 +27,23 @@ export function AdminProductsPage() {
   const [name, setName] = useState('');
   const [price, setPrice] = useState<number>(0);
   const [categoryId, setCategoryId] = useState<string>('');
+  const [createImage, setCreateImage] = useState<File | null>(null);
+  const [description, setDescription] = useState('');
+
   const [isActive, setIsActive] = useState(true);
   const [isSoldOut, setIsSoldOut] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [editing, setEditing] = useState<Product | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPrice, setEditPrice] = useState<number>(0);
+  const [editCategoryId, setEditCategoryId] = useState<string>('');
+  const [editIsActive, setEditIsActive] = useState(true);
+  const [editIsSoldOut, setEditIsSoldOut] = useState(false);
+  const [editDescription, setEditDescription] = useState('');
 
   const canUse = useMemo(() => !!tenant?.id, [tenant?.id]);
 
@@ -49,7 +63,9 @@ export function AdminProductsPage() {
 
       supabase
         .from('products')
-        .select('id,name,base_price,category_id,is_active,is_sold_out')
+        .select(
+          'id,name,description,base_price,category_id,is_active,is_sold_out',
+        )
         .eq('tenant_id', tenant.id)
         .order('created_at', { ascending: false }),
     ]);
@@ -85,30 +101,49 @@ export function AdminProductsPage() {
     setError(null);
     setMsg(null);
 
-    const payload = {
-      tenant_id: tenant.id,
-      name: name.trim(),
-      base_price: Math.max(0, Number(price) || 0),
-      category_id: categoryId || null,
-      is_active: isActive,
-      is_sold_out: isSoldOut,
-    };
+    try {
+      const payload = {
+        tenant_id: tenant.id,
+        name: name.trim(),
+        description: description.trim() || null,
+        base_price: Math.max(0, Number(price) || 0),
+        category_id: categoryId || null,
+        is_active: isActive,
+        is_sold_out: isSoldOut,
+      };
 
-    const { error } = await supabase.from('products').insert(payload);
+      // ✅ necesitamos el id del producto creado
+      const { data: inserted, error: insertErr } = await supabase
+        .from('products')
+        .insert(payload)
+        .select('id')
+        .single();
 
-    setLoading(false);
+      if (insertErr) throw insertErr;
 
-    if (error) {
-      setError(error.message);
-      return;
+      // ✅ si hay imagen, subir y guardar en product_images
+      if (createImage && inserted?.id) {
+        const url = await uploadProductImage(
+          createImage,
+          tenant.id,
+          inserted.id,
+        );
+        await addImageRow(tenant.id, inserted.id, url);
+        setCreateImage(null);
+      }
+
+      setName('');
+      setPrice(0);
+      setDescription('');
+      setIsActive(true);
+      setIsSoldOut(false);
+      setMsg('Producto creado ✅');
+      await load();
+    } catch (err: any) {
+      setError(err?.message ?? 'Error creando producto');
+    } finally {
+      setLoading(false);
     }
-
-    setName('');
-    setPrice(0);
-    setIsActive(true);
-    setIsSoldOut(false);
-    setMsg('Producto creado ✅');
-    await load();
   };
 
   const onDelete = async (id: string) => {
@@ -133,6 +168,47 @@ export function AdminProductsPage() {
     }
 
     setMsg('Producto eliminado ✅');
+    await load();
+  };
+
+  const openEdit = (p: Product) => {
+    setEditing(p);
+    setEditName(p.name);
+    setEditDescription(p.description ?? '');
+    setEditPrice(Number(p.base_price ?? 0));
+    setEditCategoryId(p.category_id ?? '');
+    setEditIsActive(!!p.is_active);
+    setEditIsSoldOut(!!p.is_sold_out);
+  };
+
+  const onSaveEdit = async () => {
+    if (!tenant?.id || !editing) return;
+
+    setLoading(true);
+    setError(null);
+    setMsg(null);
+
+    const payload = {
+      name: editName.trim(),
+      description: editDescription.trim() || null,
+      base_price: Math.max(0, Number(editPrice) || 0),
+      category_id: editCategoryId || null,
+      is_active: editIsActive,
+      is_sold_out: editIsSoldOut,
+    };
+
+    const { error } = await supabase
+      .from('products')
+      .update(payload)
+      .eq('id', editing.id)
+      .eq('tenant_id', tenant.id);
+
+    setLoading(false);
+
+    if (error) return setError(error.message);
+
+    setMsg('Producto actualizado ✅');
+    setEditing(null);
     await load();
   };
 
@@ -201,6 +277,19 @@ export function AdminProductsPage() {
             />
           </div>
 
+          <div className="grid gap-2 sm:col-span-2">
+            <label className="text-sm font-medium text-gray-700">
+              Descripción (opcional)
+            </label>
+            <textarea
+              className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
+              placeholder="Ej: Hamburguesa doble con queso, papas y bebida."
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+
           <div className="grid gap-2">
             <label className="text-sm font-medium text-gray-700">
               Categoría
@@ -220,6 +309,18 @@ export function AdminProductsPage() {
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="grid gap-2">
+            <label className="text-sm font-medium text-gray-700">
+              Imagen (opcional)
+            </label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => setCreateImage(e.target.files?.[0] ?? null)}
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+            />
           </div>
 
           <div className="flex items-end gap-3">
@@ -297,6 +398,21 @@ export function AdminProductsPage() {
                 </div>
                 <button
                   type="button"
+                  onClick={() => openEdit(p)}
+                  className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                >
+                  Editar
+                </button>
+
+                <Link
+                  to={`/admin/products/${p.id}/options`}
+                  className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                >
+                  Modificadores
+                </Link>
+
+                <button
+                  type="button"
                   onClick={() => onDelete(p.id)}
                   className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
                 >
@@ -307,6 +423,140 @@ export function AdminProductsPage() {
           </div>
         )}
       </div>
+      {editing && (
+        <div className="fixed inset-0 bg-black/40 grid place-items-center p-4 z-50">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">Editar producto</h3>
+                <p className="text-xs text-gray-500">{editing.name}</p>
+              </div>
+              <button
+                onClick={() => setEditing(null)}
+                className="rounded-xl border px-3 py-2 text-sm"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3">
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Nombre
+                </label>
+                <input
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Precio
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  value={editPrice}
+                  onChange={(e) => setEditPrice(Number(e.target.value))}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Descripción
+                </label>
+                <textarea
+                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                  rows={3}
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                />
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Categoría
+                </label>
+                <select
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  value={editCategoryId}
+                  onChange={(e) => setEditCategoryId(e.target.value)}
+                >
+                  <option value="">Sin categoría (Otros)</option>
+                  {categories.map((c) => (
+                    <option
+                      key={c.id}
+                      value={c.id}
+                    >
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Subir imagen
+                </label>
+                <input
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  type="file"
+                  accept="image/*"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    if (!f || !tenant?.id || !editing) return;
+                    try {
+                      setLoading(true);
+                      const url = await uploadProductImage(
+                        f,
+                        tenant.id,
+                        editing.id,
+                      );
+                      await addImageRow(tenant.id, editing.id, url);
+                      setMsg('Imagen subida ✅');
+                    } catch (err: any) {
+                      setError(err.message ?? 'Error subiendo imagen');
+                    } finally {
+                      setLoading(false);
+                      await load(); // si luego cargas imágenes por producto
+                    }
+                  }}
+                />
+              </div>
+
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editIsActive}
+                    onChange={(e) => setEditIsActive(e.target.checked)}
+                  />
+                  Activo
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editIsSoldOut}
+                    onChange={(e) => setEditIsSoldOut(e.target.checked)}
+                  />
+                  Agotado
+                </label>
+              </div>
+
+              <button
+                onClick={onSaveEdit}
+                disabled={loading || editName.trim().length < 2}
+                className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {loading ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
