@@ -1,4 +1,4 @@
-export type TenantType = 'restaurant' | 'entrepreneur';
+export type TenantType = "restaurant" | "entrepreneur";
 
 export type Tenant = {
   id: string;
@@ -13,4 +13,5 @@ export type Tenant = {
   delivery_enabled: boolean;
   is_active: boolean;
   created_at: string;
+  lead_time_text: string;
 };

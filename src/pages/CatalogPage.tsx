@@ -1,19 +1,19 @@
-import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import {
   fetchCategoriesByTenant,
   fetchTenantBySlug,
   fetchProductsByTenant,
-} from '../api/catalog/catalog.api';
-import { useCart } from '../context/CartContext';
-import { CartFloatingBar } from '../components/CartFloatingBar';
-import { ProductCard } from '../components/ProductCard';
+} from "../api/catalog/catalog.api";
+import { useCart } from "../context/CartContext";
+import { CartFloatingBar } from "../components/CartFloatingBar";
+import { ProductCard } from "../components/ProductCard";
 
 type TenantLite = {
   id: string;
   name: string;
   slug: string;
-  type: 'restaurant' | 'entrepreneur';
+  type: "restaurant" | "entrepreneur";
   whatsapp_phone: string;
   logo_url: string | null;
   primary_color: string | null;
@@ -58,7 +58,7 @@ export function CatalogPage() {
   useEffect(() => {
     setStoreKey(slug ?? null);
     return () => setStoreKey(null);
-  }, [slug]);
+  }, [slug, setStoreKey]);
 
   useEffect(() => {
     const run = async () => {
@@ -87,6 +87,7 @@ export function CatalogPage() {
       if (tenantData.is_active === false) {
         setTenant(tenantData as TenantLite);
         setCategories([]);
+        setProducts([]);
         setLoading(false);
         return;
       }
@@ -171,7 +172,7 @@ export function CatalogPage() {
     );
   }
 
-  const waLink = `https://wa.me/${tenant.whatsapp_phone.replace(/[^\d]/g, '')}`;
+  const waLink = `https://wa.me/${tenant.whatsapp_phone.replace(/[^\d]/g, "")}`;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -196,10 +197,10 @@ export function CatalogPage() {
                 {tenant.name}
               </h1>
               <p className="text-xs text-gray-500 leading-tight">
-                {tenant.type === 'restaurant'
-                  ? 'Restaurante'
-                  : 'Emprendimiento'}
-                {tenant.lead_time_text ? ` · ${tenant.lead_time_text}` : ''}
+                {tenant.type === "restaurant"
+                  ? "Restaurante"
+                  : "Emprendimiento"}
+                {tenant.lead_time_text ? ` · ${tenant.lead_time_text}` : ""}
               </p>
             </div>
           </div>
@@ -226,8 +227,8 @@ export function CatalogPage() {
             )}
             {tenant.delivery_enabled && (
               <span className="rounded-full border px-3 py-1">
-                Delivery{' '}
-                {tenant.delivery_fee > 0 ? `· $${tenant.delivery_fee}` : ''}
+                Delivery{" "}
+                {tenant.delivery_fee > 0 ? `· $${tenant.delivery_fee}` : ""}
               </span>
             )}
             {tenant.address && (
@@ -245,7 +246,7 @@ export function CatalogPage() {
             <span className="text-xs text-gray-500">
               {categories.length
                 ? `${categories.length} disponibles`
-                : 'Aún no hay categorías'}
+                : "Aún no hay categorías"}
             </span>
           </div>
 
@@ -324,47 +325,32 @@ export function CatalogPage() {
               </div>
 
               <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {uncategorized.map((p) => (
-                  <div
-                    key={p.id}
-                    className="rounded-2xl border p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{p.name}</div>
-                        {p.description && (
-                          <div className="mt-1 text-sm text-gray-600">
-                            {p.description}
-                          </div>
-                        )}
-                      </div>
+                {uncategorized.map((p) => {
+                  const imgUrl =
+                    (p.product_images ?? [])
+                      ?.slice()
+                      ?.sort(
+                        (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
+                      )[0]?.url ?? null;
 
-                      <div className="text-right">
-                        <div className="font-semibold">${p.base_price}</div>
-                        {p.is_sold_out && (
-                          <div className="mt-1 text-xs text-red-600">
-                            Agotado
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={p.is_sold_out}
-                      onClick={() =>
+                  return (
+                    <ProductCard
+                      key={p.id}
+                      name={p.name}
+                      description={p.description}
+                      price={p.base_price}
+                      imgUrl={imgUrl}
+                      soldOut={p.is_sold_out}
+                      onAdd={() =>
                         addItem({
                           productId: p.id,
                           name: p.name,
                           price: p.base_price,
                         })
                       }
-                      className="mt-3 w-full rounded-xl bg-black px-3 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
-                    >
-                      Agregar
-                    </button>
-                  </div>
-                ))}
+                    />
+                  );
+                })}
               </div>
             </div>
           )}
