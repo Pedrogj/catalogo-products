@@ -1,8 +1,16 @@
-import React, { useEffect, useMemo, useState } from "react";
-
-import { useMyTenant } from "../hooks/useMyTenant";
-import { useAuth } from "../providers/AuthProviders";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase/supabaseClient";
+import { useForm, type Resolver } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { toast } from "react-toastify";
+import { useAuth } from "../providers/AuthProviders";
+import { useMyTenant } from "../hooks/useMyTenant";
+import {
+  categoryCreateSchema,
+  categoryEditSchema,
+  type CategoryCreateValues,
+  type CategoryEditValues,
+} from "../schemas/category.schema";
 
 type Category = {
   id: string;
@@ -15,23 +23,77 @@ type Category = {
 export function AdminCategoriesPage() {
   const { user } = useAuth();
   const { tenant, loading: tenantLoading } = useMyTenant(user?.id);
-
   const [items, setItems] = useState<Category[]>([]);
-  const [name, setName] = useState("");
-  const [sortOrder, setSortOrder] = useState<number>(0);
+  const [editing, setEditing] = useState<Category | null>(null);
 
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [orderDraft, setOrderDraft] = useState<Record<string, number>>({});
+  const [busy, setBusy] = useState<{
+    create?: boolean;
+    save?: string | null;
+    del?: string | null;
+    load?: boolean;
+    edit?: boolean;
+  }>({
+    create: false,
+    save: null,
+    del: null,
+    load: false,
+    edit: false,
+  });
 
   const canUse = useMemo(() => !!tenant?.id, [tenant?.id]);
+
+  // Create Category form validation
+  const createResolver = zodResolver(
+    categoryCreateSchema,
+  ) as unknown as Resolver<CategoryCreateValues>;
+
+  const createForm = useForm<CategoryCreateValues>({
+    resolver: createResolver,
+    mode: "onChange",
+    defaultValues: {
+      name: "",
+      sort_order: 0,
+    },
+  });
+
+  const {
+    register: registerCreate,
+    handleSubmit: submitCreate,
+    reset: resetCreate,
+    formState: {
+      errors: createErrors,
+      isSubmitting: creating,
+      isValid: createValid,
+    },
+  } = createForm;
+
+  // Edit category form validation
+  const editResolver = zodResolver(
+    categoryEditSchema,
+  ) as unknown as Resolver<CategoryEditValues>;
+
+  const editForm = useForm<CategoryEditValues>({
+    resolver: editResolver,
+    mode: "onChange",
+    defaultValues: { name: "", sort_order: 0, is_active: true },
+  });
+
+  const {
+    register: registerEdit,
+    handleSubmit: submitEdit,
+    reset: resetEdit,
+    formState: {
+      errors: editErrors,
+      isSubmitting: editingSubmitting,
+      isValid: editValid,
+      isDirty: editDirty,
+    },
+  } = editForm;
 
   const load = async () => {
     if (!tenant?.id) return;
 
-    setLoading(true);
-    setError(null);
+    setBusy((p) => ({ ...p, load: true }));
 
     const { data, error } = await supabase
       .from("categories")
@@ -40,19 +102,14 @@ export function AdminCategoriesPage() {
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, load: false }));
 
     if (error) {
-      setError(error.message);
+      toast.error(error.message);
       return;
     }
 
     setItems((data as Category[]) ?? []);
-    const nextDraft: Record<string, number> = {};
-    (data as Category[] | null)?.forEach((c) => {
-      nextDraft[c.id] = c.sort_order;
-    });
-    setOrderDraft(nextDraft);
   };
 
   useEffect(() => {
@@ -60,40 +117,45 @@ export function AdminCategoriesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantLoading, tenant?.id]);
 
-  const onCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Oper Modal Edit
+  const openEdit = (c: Category) => {
+    setEditing(c);
+    resetEdit({
+      name: c.name ?? "",
+      sort_order: Number(c.sort_order ?? 0),
+      is_active: !!c.is_active,
+    });
+  };
+
+  const onCreate = submitCreate(async (values) => {
     if (!tenant?.id) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, create: true }));
 
     const payload = {
       tenant_id: tenant.id,
-      name: name.trim(),
-      sort_order: sortOrder,
+      name: values.name.trim(),
+      sort_order: Number(values.sort_order) || 0,
       is_active: true,
     };
 
     const { error } = await supabase.from("categories").insert(payload);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, create: false }));
 
     if (error) {
-      // por tu índice unique (tenant_id, lower(name))
       if (error.message.toLowerCase().includes("duplicate")) {
-        setError("Ya existe una categoría con ese nombre.");
+        toast.error("Ya existe una categoría con ese nombre.");
         return;
       }
-      setError(error.message);
+      toast.error(error.message);
       return;
     }
 
-    setName("");
-    setSortOrder(0);
-    setMsg("Categoría creada ✅");
+    resetCreate({ name: "", sort_order: 0 });
+    toast.success("Categoría creada");
     await load();
-  };
+  });
 
   const onDelete = async (id: string) => {
     if (!tenant?.id) return;
@@ -101,9 +163,7 @@ export function AdminCategoriesPage() {
     const ok = confirm("¿Eliminar esta categoría?");
     if (!ok) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, del: id }));
 
     const { error } = await supabase
       .from("categories")
@@ -111,42 +171,50 @@ export function AdminCategoriesPage() {
       .eq("id", id)
       .eq("tenant_id", tenant.id);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, del: null }));
 
     if (error) {
-      setError(error.message);
+      toast.error(error.message);
       return;
     }
 
-    setMsg("Categoría eliminada ✅");
+    toast.success("Categoría eliminada");
     await load();
   };
 
-  const onSaveOrder = async (id: string) => {
-    if (!tenant?.id) return;
+  const onSaveEdit = submitEdit(async (values) => {
+    if (!tenant?.id || !editing) return;
 
-    const newOrder = Number(orderDraft[id] ?? 0);
+    setBusy((p) => ({ ...p, edit: true }));
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    const payload = {
+      name: values.name.trim(),
+      sort_order: Number(values.sort_order) || 0,
+      is_active: values.is_active,
+    };
 
     const { error } = await supabase
       .from("categories")
-      .update({ sort_order: newOrder })
-      .eq("id", id)
+      .update(payload)
+      .eq("id", editing.id)
       .eq("tenant_id", tenant.id);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, edit: false }));
 
     if (error) {
-      setError(error.message);
+      if (error.message.toLowerCase().includes("duplicate")) {
+        toast.error("Ya existe una categoría con ese nombre.");
+        return;
+      }
+      toast.error(error.message);
       return;
     }
 
-    setMsg("Orden actualizado ✅");
+    resetEdit(values);
+    toast.success("Categoría actualizada");
+    setEditing(null);
     await load();
-  };
+  });
 
   if (tenantLoading) {
     return (
@@ -184,40 +252,36 @@ export function AdminCategoriesPage() {
             <input
               className="mt-2 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
               placeholder="Ej: Hamburguesas"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
+              {...registerCreate("name")}
             />
+            {createErrors.name && (
+              <p className="mt-1 text-xs text-red-600">
+                {createErrors.name.message}
+              </p>
+            )}
           </div>
 
           <div>
             <label className="text-sm font-medium text-gray-700">Orden</label>
             <input
-              className="mt-2 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
               type="number"
-              value={sortOrder}
-              onChange={(e) => setSortOrder(Number(e.target.value))}
+              className="mt-2 w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
+              {...registerCreate("sort_order", { valueAsNumber: true })}
             />
+            {createErrors.sort_order && (
+              <p className="mt-1 text-xs text-red-600">
+                {createErrors.sort_order.message}
+              </p>
+            )}
           </div>
 
           <div className="sm:col-span-3">
-            {error && (
-              <div className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                {error}
-              </div>
-            )}
-            {msg && (
-              <div className="mb-3 rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
-                {msg}
-              </div>
-            )}
-
             <button
               type="submit"
-              disabled={loading || name.trim().length < 2}
+              disabled={busy.create || creating || !createValid}
               className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99]"
             >
-              {loading ? "Guardando..." : "Crear"}
+              {busy.create ? "Guardando..." : "Crear"}
             </button>
           </div>
         </form>
@@ -228,9 +292,10 @@ export function AdminCategoriesPage() {
           <h2 className="text-base font-semibold">Listado</h2>
           <button
             onClick={load}
-            className="text-sm underline underline-offset-4 text-gray-700"
+            disabled={busy.load}
+            className="text-sm underline underline-offset-4 text-gray-700 disabled:opacity-50"
           >
-            Refrescar
+            {busy.load ? "Actualizando..." : "Refrescar"}
           </button>
         </div>
 
@@ -241,9 +306,6 @@ export function AdminCategoriesPage() {
         ) : (
           <div className="mt-4 grid gap-2">
             {items.map((c) => {
-              const isDirty =
-                (orderDraft[c.id] ?? c.sort_order) !== c.sort_order;
-
               return (
                 <div
                   key={c.id}
@@ -257,36 +319,22 @@ export function AdminCategoriesPage() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-gray-600">Nuevo</span>
-                      <input
-                        type="number"
-                        className="w-24 rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
-                        value={orderDraft[c.id] ?? c.sort_order}
-                        onChange={(e) =>
-                          setOrderDraft((prev) => ({
-                            ...prev,
-                            [c.id]: Number(e.target.value),
-                          }))
-                        }
-                      />
-                    </div>
-
                     <button
                       type="button"
-                      onClick={() => onSaveOrder(c.id)}
-                      disabled={loading || !isDirty}
-                      className="rounded-xl bg-black px-3 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
+                      onClick={() => openEdit(c)}
+                      disabled={busy.del === c.id}
+                      className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
                     >
-                      Guardar
+                      Editar
                     </button>
 
                     <button
                       type="button"
                       onClick={() => onDelete(c.id)}
-                      className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
+                      disabled={busy.del === c.id}
+                      className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
                     >
-                      Eliminar
+                      {busy.del === c.id ? "Eliminando..." : "Eliminar"}
                     </button>
                   </div>
                 </div>
@@ -302,6 +350,79 @@ export function AdminCategoriesPage() {
           <span className="ml-2 font-mono">/t/{tenant?.slug}</span>
         </div>
       </div>
+
+      {/* Modal Edition */}
+      {editing && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">Editar categoría</h3>
+                <p className="text-xs text-gray-500">{editing.name}</p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setEditing(null);
+                  resetEdit({ name: "", sort_order: 0, is_active: true });
+                }}
+                className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+              >
+                Cerrar
+              </button>
+            </div>
+
+            <form onSubmit={onSaveEdit} className="mt-4 grid gap-3">
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Nombre
+                </label>
+                <input
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  {...registerEdit("name")}
+                />
+                {editErrors.name && (
+                  <p className="text-xs text-red-600">
+                    {editErrors.name.message}
+                  </p>
+                )}
+              </div>
+
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Orden
+                </label>
+                <input
+                  type="number"
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  {...registerEdit("sort_order", { valueAsNumber: true })}
+                />
+                {editErrors.sort_order && (
+                  <p className="text-xs text-red-600">
+                    {editErrors.sort_order.message}
+                  </p>
+                )}
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input type="checkbox" {...registerEdit("is_active")} />
+                Activa (visible en catálogo)
+              </label>
+
+              <button
+                type="submit"
+                disabled={
+                  busy.edit || editingSubmitting || !editValid || !editDirty
+                }
+                className="mt-2 rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {busy.edit ? "Guardando..." : "Guardar cambios"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
