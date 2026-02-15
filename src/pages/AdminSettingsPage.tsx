@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { supabase } from "../supabase/supabaseClient";
@@ -9,8 +9,12 @@ import {
   settingsSchema,
   type SettingsFormValues,
 } from "../schemas/settings.schema";
+import { makeQrDataUrl, downloadDataUrl } from "../helpers/qr";
 
 export function AdminSettingsPage() {
+  const [qrUrl, setQrUrl] = useState<string>("");
+  const [qrLoading, setQrLoading] = useState(false);
+
   const { user } = useAuth();
   const { tenant, loading: tenantLoading } = useMyTenant(user?.id);
 
@@ -43,6 +47,11 @@ export function AdminSettingsPage() {
 
   const canUse = useMemo(() => !!tenant?.id, [tenant?.id]);
 
+  const catalogUrl = useMemo(() => {
+    if (!tenant?.slug) return "";
+    return `${window.location.origin}/t/${tenant.slug}`;
+  }, [tenant?.slug]);
+
   // cargar valores del tenant al form
   useEffect(() => {
     if (!tenantLoading && tenant) {
@@ -59,10 +68,21 @@ export function AdminSettingsPage() {
     }
   }, [tenantLoading, tenant, reset]);
 
-  const catalogUrl = useMemo(() => {
-    if (!tenant?.slug) return "";
-    return `${window.location.origin}/t/${tenant.slug}`;
-  }, [tenant?.slug]);
+  useEffect(() => {
+    const run = async () => {
+      if (!catalogUrl) return;
+      try {
+        setQrLoading(true);
+        const dataUrl = await makeQrDataUrl(catalogUrl);
+        setQrUrl(dataUrl);
+      } catch (e: any) {
+        toast.error(e?.message ?? "Error generando QR");
+      } finally {
+        setQrLoading(false);
+      }
+    };
+    run();
+  }, [catalogUrl]);
 
   const onSave = handleSubmit(async (values) => {
     if (!tenant?.id) return;
@@ -146,6 +166,45 @@ export function AdminSettingsPage() {
           >
             Ver catálogo
           </a>
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-2xl border bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-semibold">QR del catálogo</div>
+            <div className="text-xs text-gray-500">
+              Imprímelo o compártelo para que tus clientes entren al link.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            disabled={!qrUrl || qrLoading}
+            onClick={() => {
+              downloadDataUrl(qrUrl, `qr-${tenant?.slug ?? "catalogo"}.png`);
+              toast.success("QR descargado ✅");
+            }}
+            className="rounded-xl border px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Descargar
+          </button>
+        </div>
+
+        <div className="mt-4 grid place-items-center">
+          {qrLoading ? (
+            <div className="text-sm text-gray-600">Generando QR...</div>
+          ) : qrUrl ? (
+            <img
+              src={qrUrl}
+              alt="QR catálogo"
+              className="h-56 w-56 rounded-xl border bg-white p-2"
+            />
+          ) : (
+            <div className="text-sm text-gray-600">
+              No hay link para generar QR.
+            </div>
+          )}
         </div>
       </div>
 
