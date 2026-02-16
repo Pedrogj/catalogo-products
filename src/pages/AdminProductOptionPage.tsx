@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { supabase } from '../supabase/supabaseClient';
-import { useAuth } from '../providers/AuthProviders';
-import { useMyTenant } from '../hooks/useMyTenant';
+import { useEffect, useMemo, useState } from "react";
+import { useParams, Link } from "react-router-dom";
+import { supabase } from "../supabase/supabaseClient";
+import { useAuth } from "../providers/AuthProviders";
+import { useMyTenant } from "../hooks/useMyTenant";
+import { toast } from "react-toastify";
 
 type OptionGroup = {
   id: string;
   tenant_id: string;
   product_id: string;
   name: string;
-  type: 'single' | 'multiple';
+  type: "single" | "multiple";
   required: boolean;
   sort_order: number;
 };
@@ -44,8 +45,8 @@ export function AdminProductOptionsPage() {
   >({});
 
   // Create group form
-  const [gName, setGName] = useState('');
-  const [gType, setGType] = useState<'single' | 'multiple'>('single');
+  const [gName, setGName] = useState("");
+  const [gType, setGType] = useState<"single" | "multiple">("single");
   const [gRequired, setGRequired] = useState(false);
   const [gOrder, setGOrder] = useState<number>(0);
 
@@ -62,9 +63,19 @@ export function AdminProductOptionsPage() {
   const [optDelta, setOptDelta] = useState<Record<string, number>>({});
   const [optOrder, setOptOrder] = useState<Record<string, number>>({});
 
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{
+    load?: boolean;
+    createGroup?: boolean;
+    groupAction?: string | null; // groupId
+    createOption?: string | null; // groupId
+    optionAction?: string | null; // optionId
+  }>({
+    load: false,
+    createGroup: false,
+    groupAction: null,
+    createOption: null,
+    optionAction: null,
+  });
 
   const canUse = useMemo(
     () => !!tenant?.id && !!productId,
@@ -74,27 +85,28 @@ export function AdminProductOptionsPage() {
   const load = async () => {
     if (!tenant?.id || !productId) return;
 
-    setLoading(true);
-    setError(null);
+    setBusy((p) => ({ ...p, load: true }));
 
     // 1) product
     const prodRes = await supabase
-      .from('products')
-      .select('id,tenant_id,name,base_price')
-      .eq('tenant_id', tenant.id)
-      .eq('id', productId)
+      .from("products")
+      .select("id,tenant_id,name,base_price")
+      .eq("tenant_id", tenant.id)
+      .eq("id", productId)
       .maybeSingle();
 
     if (prodRes.error) {
-      setLoading(false);
-      setError(prodRes.error.message);
+      setBusy((p) => ({ ...p, load: false }));
+      toast.error(prodRes.error.message);
       return;
     }
     if (!prodRes.data) {
-      setLoading(false);
+      setBusy((p) => ({ ...p, load: false }));
       setProduct(null);
       setGroups([]);
       setOptionsByGroup({});
+      setGroupOrderDraft({});
+      setOptionOrderDraft({});
       return;
     }
 
@@ -105,15 +117,15 @@ export function AdminProductOptionsPage() {
 
     // 2) groups
     const groupsRes = await supabase
-      .from('option_groups')
-      .select('id,tenant_id,product_id,name,type,required,sort_order')
-      .eq('tenant_id', tenant.id)
-      .eq('product_id', productId)
-      .order('sort_order', { ascending: true });
+      .from("option_groups")
+      .select("id,tenant_id,product_id,name,type,required,sort_order")
+      .eq("tenant_id", tenant.id)
+      .eq("product_id", productId)
+      .order("sort_order", { ascending: true });
 
     if (groupsRes.error) {
-      setLoading(false);
-      setError(groupsRes.error.message);
+      setBusy((p) => ({ ...p, load: false }));
+      toast.error(groupsRes.error.message);
       return;
     }
 
@@ -128,22 +140,23 @@ export function AdminProductOptionsPage() {
     // 3) options for all groups
     if (gs.length === 0) {
       setOptionsByGroup({});
-      setLoading(false);
+      setOptionOrderDraft({});
+      setBusy((p) => ({ ...p, load: false }));
       return;
     }
 
     const groupIds = gs.map((g) => g.id);
 
     const optionsRes = await supabase
-      .from('options')
-      .select('id,tenant_id,group_id,name,price_delta,sort_order,is_active')
-      .eq('tenant_id', tenant.id)
-      .in('group_id', groupIds)
-      .order('sort_order', { ascending: true });
+      .from("options")
+      .select("id,tenant_id,group_id,name,price_delta,sort_order,is_active")
+      .eq("tenant_id", tenant.id)
+      .in("group_id", groupIds)
+      .order("sort_order", { ascending: true });
 
     if (optionsRes.error) {
-      setLoading(false);
-      setError(optionsRes.error.message);
+      setBusy((p) => ({ ...p, load: false }));
+      toast.error(optionsRes.error.message);
       return;
     }
 
@@ -168,7 +181,7 @@ export function AdminProductOptionsPage() {
     });
     setOptionOrderDraft(od);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, load: false }));
   };
 
   useEffect(() => {
@@ -181,9 +194,7 @@ export function AdminProductOptionsPage() {
     e.preventDefault();
     if (!tenant?.id || !productId) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, createGroup: true }));
 
     const payload = {
       tenant_id: tenant.id,
@@ -194,16 +205,21 @@ export function AdminProductOptionsPage() {
       sort_order: Number(gOrder) || 0,
     };
 
-    const { error } = await supabase.from('option_groups').insert(payload);
-    setLoading(false);
+    const { error } = await supabase.from("option_groups").insert(payload);
 
-    if (error) return setError(error.message);
+    setBusy((p) => ({ ...p, createGroup: false }));
 
-    setGName('');
-    setGType('single');
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+
+    setGName("");
+    setGType("single");
     setGRequired(false);
     setGOrder(0);
-    setMsg('Grupo creado ✅');
+
+    toast.success("Grupo creado");
     await load();
   };
 
@@ -213,21 +229,22 @@ export function AdminProductOptionsPage() {
   ) => {
     if (!tenant?.id) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, groupAction: groupId }));
 
     const { error } = await supabase
-      .from('option_groups')
+      .from("option_groups")
       .update(patch)
-      .eq('tenant_id', tenant.id)
-      .eq('id', groupId);
+      .eq("tenant_id", tenant.id)
+      .eq("id", groupId);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, groupAction: null }));
 
-    if (error) return setError(error.message);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
 
-    setMsg('Grupo actualizado ✅');
+    toast.success("Grupo actualizado");
     await load();
   };
 
@@ -238,23 +255,24 @@ export function AdminProductOptionsPage() {
 
   const deleteGroup = async (groupId: string) => {
     if (!tenant?.id) return;
-    if (!confirm('¿Eliminar este grupo? (Se eliminarán sus opciones)')) return;
+    if (!confirm("¿Eliminar este grupo? (Se eliminarán sus opciones)")) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, groupAction: groupId }));
 
     const { error } = await supabase
-      .from('option_groups')
+      .from("option_groups")
       .delete()
-      .eq('tenant_id', tenant.id)
-      .eq('id', groupId);
+      .eq("tenant_id", tenant.id)
+      .eq("id", groupId);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, groupAction: null }));
 
-    if (error) return setError(error.message);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
 
-    setMsg('Grupo eliminado ✅');
+    toast.success("Grupo eliminado");
     await load();
   };
 
@@ -262,15 +280,13 @@ export function AdminProductOptionsPage() {
   const createOption = async (groupId: string) => {
     if (!tenant?.id) return;
 
-    const name = (optName[groupId] ?? '').trim();
+    const name = (optName[groupId] ?? "").trim();
     const delta = Number(optDelta[groupId] ?? 0) || 0;
     const order = Number(optOrder[groupId] ?? 0) || 0;
 
     if (name.length < 2) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, createOption: groupId }));
 
     const payload = {
       tenant_id: tenant.id,
@@ -281,16 +297,20 @@ export function AdminProductOptionsPage() {
       is_active: true,
     };
 
-    const { error } = await supabase.from('options').insert(payload);
-    setLoading(false);
+    const { error } = await supabase.from("options").insert(payload);
 
-    if (error) return setError(error.message);
+    setBusy((p) => ({ ...p, createOption: null }));
 
-    setOptName((p) => ({ ...p, [groupId]: '' }));
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
+
+    setOptName((p) => ({ ...p, [groupId]: "" }));
     setOptDelta((p) => ({ ...p, [groupId]: 0 }));
     setOptOrder((p) => ({ ...p, [groupId]: 0 }));
 
-    setMsg('Opción creada ✅');
+    toast.success("Opción creada");
     await load();
   };
 
@@ -301,22 +321,23 @@ export function AdminProductOptionsPage() {
   ) => {
     if (!tenant?.id) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, optionAction: optionId }));
 
     const { error } = await supabase
-      .from('options')
+      .from("options")
       .update(patch)
-      .eq('tenant_id', tenant.id)
-      .eq('id', optionId)
-      .eq('group_id', groupId);
+      .eq("tenant_id", tenant.id)
+      .eq("id", optionId)
+      .eq("group_id", groupId);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, optionAction: null }));
 
-    if (error) return setError(error.message);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
 
-    setMsg('Opción actualizada ✅');
+    toast.success("Opción actualizada ✅");
     await load();
   };
 
@@ -333,24 +354,25 @@ export function AdminProductOptionsPage() {
 
   const deleteOption = async (groupId: string, optionId: string) => {
     if (!tenant?.id) return;
-    if (!confirm('¿Eliminar esta opción?')) return;
+    if (!confirm("¿Eliminar esta opción?")) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, optionAction: optionId }));
 
     const { error } = await supabase
-      .from('options')
+      .from("options")
       .delete()
-      .eq('tenant_id', tenant.id)
-      .eq('id', optionId)
-      .eq('group_id', groupId);
+      .eq("tenant_id", tenant.id)
+      .eq("id", optionId)
+      .eq("group_id", groupId);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, optionAction: null }));
 
-    if (error) return setError(error.message);
+    if (error) {
+      toast.error(error.message);
+      return;
+    }
 
-    setMsg('Opción eliminada ✅');
+    toast.success("Opción eliminada ✅");
     await load();
   };
 
@@ -406,27 +428,13 @@ export function AdminProductOptionsPage() {
             ← Volver a productos
           </Link>
         </div>
-
-        {error && (
-          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {error}
-          </div>
-        )}
-        {msg && (
-          <div className="mt-4 rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
-            {msg}
-          </div>
-        )}
       </div>
 
       {/* Create Group */}
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
         <h2 className="text-base font-semibold">Crear grupo</h2>
 
-        <form
-          onSubmit={createGroup}
-          className="mt-4 grid gap-3 sm:grid-cols-4"
-        >
+        <form onSubmit={createGroup} className="mt-4 grid gap-3 sm:grid-cols-4">
           <div className="sm:col-span-2">
             <label className="text-sm font-medium text-gray-700">Nombre</label>
             <input
@@ -472,10 +480,12 @@ export function AdminProductOptionsPage() {
 
             <button
               type="submit"
-              disabled={loading || gName.trim().length < 2}
+              disabled={
+                busy.createGroup || busy.load || gName.trim().length < 2
+              }
               className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99]"
             >
-              {loading ? 'Creando...' : 'Crear grupo'}
+              {busy.createGroup ? "Creando..." : "Crear grupo"}
             </button>
           </div>
         </form>
@@ -491,6 +501,9 @@ export function AdminProductOptionsPage() {
           </div>
         ) : (
           groups.map((g) => {
+            const groupBusy = busy.groupAction === g.id || !!busy.load;
+            const creatingOptHere = busy.createOption === g.id;
+
             const opts = optionsByGroup[g.id] ?? [];
             const groupDirty =
               (groupOrderDraft[g.id] ?? g.sort_order) !== g.sort_order;
@@ -505,7 +518,7 @@ export function AdminProductOptionsPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="text-base font-semibold">{g.name}</div>
                       <span className="rounded-full border px-2 py-0.5 text-xs text-gray-600">
-                        {g.type === 'single' ? 'single' : 'multiple'}
+                        {g.type === "single" ? "single" : "multiple"}
                       </span>
                       {g.required && (
                         <span className="rounded-full border px-2 py-0.5 text-xs text-gray-600">
@@ -522,7 +535,8 @@ export function AdminProductOptionsPage() {
                         <span className="text-sm text-gray-600">Orden</span>
                         <input
                           type="number"
-                          className="w-24 rounded-xl border px-3 py-2 text-sm"
+                          disabled={groupBusy}
+                          className="w-24 rounded-xl border px-3 py-2 text-sm disabled:bg-gray-100"
                           value={groupOrderDraft[g.id] ?? g.sort_order}
                           onChange={(e) =>
                             setGroupOrderDraft((p) => ({
@@ -533,9 +547,9 @@ export function AdminProductOptionsPage() {
                         />
                         <button
                           type="button"
-                          disabled={loading || !groupDirty}
+                          disabled={groupBusy || !groupDirty}
                           onClick={() => saveGroupOrder(g)}
-                          className="rounded-xl bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                          className="rounded-xl bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           Guardar
                         </button>
@@ -544,12 +558,12 @@ export function AdminProductOptionsPage() {
                       <div className="flex items-center gap-2">
                         <span className="text-sm text-gray-600">Tipo</span>
                         <select
-                          className="rounded-xl border px-3 py-2 text-sm"
+                          className="rounded-xl border px-3 py-2 text-sm disabled:bg-gray-100"
                           value={g.type}
                           onChange={(e) =>
                             saveGroupMeta(g.id, { type: e.target.value as any })
                           }
-                          disabled={loading}
+                          disabled={groupBusy}
                         >
                           <option value="single">single</option>
                           <option value="multiple">multiple</option>
@@ -560,7 +574,7 @@ export function AdminProductOptionsPage() {
                         <input
                           type="checkbox"
                           checked={g.required}
-                          disabled={loading}
+                          disabled={groupBusy}
                           onChange={(e) =>
                             saveGroupMeta(g.id, { required: e.target.checked })
                           }
@@ -572,8 +586,9 @@ export function AdminProductOptionsPage() {
 
                   <button
                     type="button"
+                    disabled={groupBusy}
                     onClick={() => deleteGroup(g.id)}
-                    className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
+                    className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Eliminar grupo
                   </button>
@@ -587,9 +602,10 @@ export function AdminProductOptionsPage() {
                     <div className="sm:col-span-2">
                       <label className="text-sm text-gray-700">Nombre</label>
                       <input
-                        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
+                        disabled={groupBusy}
+                        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm disabled:bg-gray-100"
                         placeholder="Ej: Grande"
-                        value={optName[g.id] ?? ''}
+                        value={optName[g.id] ?? ""}
                         onChange={(e) =>
                           setOptName((p) => ({ ...p, [g.id]: e.target.value }))
                         }
@@ -599,8 +615,9 @@ export function AdminProductOptionsPage() {
                     <div>
                       <label className="text-sm text-gray-700">+ Precio</label>
                       <input
+                        disabled={groupBusy}
                         type="number"
-                        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
+                        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm disabled:bg-gray-100"
                         value={optDelta[g.id] ?? 0}
                         onChange={(e) =>
                           setOptDelta((p) => ({
@@ -614,8 +631,9 @@ export function AdminProductOptionsPage() {
                     <div>
                       <label className="text-sm text-gray-700">Orden</label>
                       <input
+                        disabled={groupBusy}
                         type="number"
-                        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
+                        className="mt-2 w-full rounded-xl border px-3 py-2 text-sm disabled:bg-gray-100"
                         value={optOrder[g.id] ?? 0}
                         onChange={(e) =>
                           setOptOrder((p) => ({
@@ -631,11 +649,13 @@ export function AdminProductOptionsPage() {
                         type="button"
                         onClick={() => createOption(g.id)}
                         disabled={
-                          loading || (optName[g.id] ?? '').trim().length < 2
+                          groupBusy ||
+                          creatingOptHere ||
+                          (optName[g.id] ?? "").trim().length < 2
                         }
-                        className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+                        className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        {loading ? 'Guardando...' : 'Crear opción'}
+                        {creatingOptHere ? "Guardando..." : "Crear opción"}
                       </button>
                     </div>
                   </div>
@@ -651,6 +671,7 @@ export function AdminProductOptionsPage() {
                     {opts.map((o) => {
                       const od = optionOrderDraft[g.id]?.[o.id] ?? o.sort_order;
                       const optDirty = od !== o.sort_order;
+                      const optBusy = busy.optionAction === o.id || !!busy.load;
 
                       return (
                         <div
@@ -659,7 +680,7 @@ export function AdminProductOptionsPage() {
                         >
                           <div className="min-w-0">
                             <div className="font-medium truncate">
-                              {o.name}{' '}
+                              {o.name}{" "}
                               <span className="text-sm text-gray-600">
                                 {o.price_delta >= 0
                                   ? `(+${o.price_delta})`
@@ -667,7 +688,7 @@ export function AdminProductOptionsPage() {
                               </span>
                             </div>
                             <div className="text-xs text-gray-500">
-                              {o.is_active ? 'Activa' : 'Inactiva'}
+                              {o.is_active ? "Activa" : "Inactiva"}
                             </div>
                           </div>
 
@@ -678,7 +699,8 @@ export function AdminProductOptionsPage() {
                               </span>
                               <input
                                 type="number"
-                                className="w-24 rounded-xl border px-3 py-2 text-sm"
+                                className="w-24 rounded-xl border px-3 py-2 text-sm disabled:bg-gray-100"
+                                disabled={optBusy}
                                 value={od}
                                 onChange={(e) =>
                                   setOptionOrderDraft((prev) => ({
@@ -692,9 +714,9 @@ export function AdminProductOptionsPage() {
                               />
                               <button
                                 type="button"
-                                disabled={loading || !optDirty}
+                                disabled={optBusy || !optDirty}
                                 onClick={() => saveOptionOrder(g.id, o)}
-                                className="rounded-xl bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+                                className="rounded-xl bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 Guardar
                               </button>
@@ -703,16 +725,17 @@ export function AdminProductOptionsPage() {
                             <button
                               type="button"
                               onClick={() => toggleOptionActive(g.id, o)}
-                              disabled={loading}
-                              className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                              disabled={optBusy}
+                              className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              {o.is_active ? 'Desactivar' : 'Activar'}
+                              {o.is_active ? "Desactivar" : "Activar"}
                             </button>
 
                             <button
                               type="button"
                               onClick={() => deleteOption(g.id, o.id)}
-                              className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                              disabled={optBusy}
+                              className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               Eliminar
                             </button>
