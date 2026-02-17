@@ -1,26 +1,37 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm, type Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { toast } from 'react-toastify';
+
 import { supabase } from '../supabase/supabaseClient';
 import { useMyTenant } from '../hooks/useMyTenant';
 import { useAuth } from '../providers/AuthProviders';
+
 import { addImageRow, uploadProductImage } from '../helpers/uploadImage';
 import {
-  productSchema,
-  type ProductFormValues,
+  productCreateSchema,
+  productEditSchema,
+  type ProductCreateValues,
+  type ProductEditValues,
 } from '../schemas/product.schema';
-import { Alert } from '../ui/components/Alert';
 
 type Category = { id: string; name: string; sort_order: number };
+
 type Product = {
   id: string;
+  tenant_id: string;
   name: string;
   description: string | null;
   base_price: number;
   category_id: string | null;
   is_active: boolean;
   is_sold_out: boolean;
+  thumbUrl?: string | null;
+};
+
+type ProductRow = Product & {
+  product_images?: { url: string; sort_order: number }[] | null;
 };
 
 export function AdminProductsPage() {
@@ -29,29 +40,39 @@ export function AdminProductsPage() {
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [editing, setEditing] = useState<Product | null>(null);
 
   const [createImage, setCreateImage] = useState<File | null>(null);
 
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const [editing, setEditing] = useState<Product | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editPrice, setEditPrice] = useState<number>(0);
-  const [editCategoryId, setEditCategoryId] = useState<string>('');
-  const [editIsActive, setEditIsActive] = useState(true);
-  const [editIsSoldOut, setEditIsSoldOut] = useState(false);
-  const [editDescription, setEditDescription] = useState('');
-
   const createImageRef = useRef<HTMLInputElement | null>(null);
+  const editImageRef = useRef<HTMLInputElement | null>(null);
 
-  const resolver = zodResolver(
-    productSchema,
-  ) as unknown as Resolver<ProductFormValues>;
+  const [busy, setBusy] = useState<{
+    load?: boolean;
+    create?: boolean;
+    edit?: boolean;
+    delId?: string | null;
+    uploadImg?: boolean;
+  }>({
+    load: false,
+    create: false,
+    edit: false,
+    delId: null,
+    uploadImg: false,
+  });
 
-  const form = useForm<ProductFormValues>({
-    resolver,
+  const canUse = useMemo(() => !!tenant?.id, [tenant?.id]);
+
+  // -----------------------------
+  // Create form (RHF + Zod)
+  // -----------------------------
+  const createResolver = zodResolver(
+    productCreateSchema,
+  ) as unknown as Resolver<ProductCreateValues>;
+
+  const createForm = useForm<ProductCreateValues>({
+    resolver: createResolver,
+    mode: 'onChange',
     defaultValues: {
       name: '',
       base_price: 0,
@@ -63,20 +84,56 @@ export function AdminProductsPage() {
   });
 
   const {
-    register,
-    handleSubmit,
-    reset,
-    setValue,
-    formState: { errors, isSubmitting },
-  } = form;
+    register: registerCreate,
+    handleSubmit: submitCreate,
+    reset: resetCreate,
+    setValue: setCreateValue,
+    formState: {
+      errors: createErrors,
+      isSubmitting: creatingSubmitting,
+      isValid: createValid,
+    },
+  } = createForm;
 
-  const canUse = useMemo(() => !!tenant?.id, [tenant?.id]);
+  // -----------------------------
+  // Edit form (RHF + Zod)
+  // -----------------------------
+  const editResolver = zodResolver(
+    productEditSchema,
+  ) as unknown as Resolver<ProductEditValues>;
 
+  const editForm = useForm<ProductEditValues>({
+    resolver: editResolver,
+    mode: 'onChange',
+    defaultValues: {
+      name: '',
+      base_price: 0,
+      description: '',
+      category_id: '',
+      is_active: true,
+      is_sold_out: false,
+    },
+  });
+
+  const {
+    register: registerEdit,
+    handleSubmit: submitEdit,
+    reset: resetEdit,
+    formState: {
+      errors: editErrors,
+      isSubmitting: editSubmitting,
+      isValid: editValid,
+      isDirty: editDirty,
+    },
+  } = editForm;
+
+  // -----------------------------
+  // Load data
+  // -----------------------------
   const load = async () => {
     if (!tenant?.id) return;
 
-    setLoading(true);
-    setError(null);
+    setBusy((p) => ({ ...p, load: true }));
 
     const [catRes, prodRes] = await Promise.all([
       supabase
@@ -89,28 +146,46 @@ export function AdminProductsPage() {
       supabase
         .from('products')
         .select(
-          'id,name,description,base_price,category_id,is_active,is_sold_out',
+          'id,tenant_id,name,description,base_price,category_id,is_active,is_sold_out, product_images (url, sort_order)',
         )
         .eq('tenant_id', tenant.id)
         .order('created_at', { ascending: false }),
     ]);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, load: false }));
 
-    if (catRes.error) return setError(catRes.error.message);
-    if (prodRes.error) return setError(prodRes.error.message);
+    if (catRes.error) {
+      toast.error(catRes.error.message);
+      return;
+    }
+    if (prodRes.error) {
+      toast.error(prodRes.error.message);
+      return;
+    }
 
     const cats = (catRes.data as Category[]) ?? [];
     setCategories(cats);
+
+    const rows = (prodRes.data as ProductRow[]) ?? [];
+
     setProducts(
-      ((prodRes.data as Product[]) ?? []).map((p) => ({
-        ...p,
-        base_price: Number(p.base_price ?? 0),
-      })),
+      rows.map((p) => {
+        const imgs = (p.product_images ?? [])
+          .slice()
+          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+        const thumbUrl = imgs[0]?.url ?? null;
+
+        return {
+          ...p,
+          base_price: Number(p.base_price ?? 0),
+          thumbUrl,
+        };
+      }),
     );
 
-    // set categoría por defecto si existe
-    if (cats[0]?.id) setValue('category_id', cats[0].id);
+    // default de categoría (opcional): si quieres que se seleccione la primera
+    // pero dejando también "Otros" disponible:
+    if (cats[0]?.id) setCreateValue('category_id', cats[0].id);
   };
 
   useEffect(() => {
@@ -118,11 +193,13 @@ export function AdminProductsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantLoading, tenant?.id]);
 
-  const onCreate = handleSubmit(async (values) => {
+  // -----------------------------
+  // Create product
+  // -----------------------------
+  const onCreate = submitCreate(async (values) => {
     if (!tenant?.id) return;
 
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, create: true }));
 
     try {
       const payload = {
@@ -132,9 +209,9 @@ export function AdminProductsPage() {
           ? values.description.trim()
           : null,
         base_price: Math.max(0, Number(values.base_price) || 0),
-        category_id: values.category_id || null,
-        is_active: values.is_active,
-        is_sold_out: values.is_sold_out,
+        category_id: values.category_id ? values.category_id : null,
+        is_active: !!values.is_active,
+        is_sold_out: !!values.is_sold_out,
       };
 
       const { data: inserted, error: insertErr } = await supabase
@@ -145,18 +222,26 @@ export function AdminProductsPage() {
 
       if (insertErr) throw insertErr;
 
+      // subir imagen si viene
       if (createImage && inserted?.id) {
-        const url = await uploadProductImage(
-          createImage,
-          tenant.id,
-          inserted.id,
-        );
-        await addImageRow(tenant.id, inserted.id, url);
-        setCreateImage(null);
-        if (createImageRef.current) createImageRef.current.value = '';
+        setBusy((p) => ({ ...p, uploadImg: true }));
+        try {
+          const url = await uploadProductImage(
+            createImage,
+            tenant.id,
+            inserted.id,
+          );
+          await addImageRow(tenant.id, inserted.id, url);
+          toast.success('Producto creado + imagen subida');
+        } finally {
+          setBusy((p) => ({ ...p, uploadImg: false }));
+        }
+      } else {
+        toast.success('Producto creado');
       }
 
-      reset({
+      // reset form
+      resetCreate({
         name: '',
         base_price: 0,
         description: '',
@@ -165,20 +250,25 @@ export function AdminProductsPage() {
         is_sold_out: false,
       });
 
-      setMsg('Producto creado ✅');
+      setCreateImage(null);
+      if (createImageRef.current) createImageRef.current.value = '';
+
       await load();
     } catch (err: any) {
-      setError(err?.message ?? 'Error creando producto');
+      toast.error(err?.message ?? 'Error creando producto');
+    } finally {
+      setBusy((p) => ({ ...p, create: false }));
     }
   });
 
+  // -----------------------------
+  // Delete product
+  // -----------------------------
   const onDelete = async (id: string) => {
     if (!tenant?.id) return;
     if (!confirm('¿Eliminar este producto?')) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, delId: id }));
 
     const { error } = await supabase
       .from('products')
@@ -186,58 +276,96 @@ export function AdminProductsPage() {
       .eq('id', id)
       .eq('tenant_id', tenant.id);
 
-    setLoading(false);
+    setBusy((p) => ({ ...p, delId: null }));
 
     if (error) {
-      setError(error.message);
+      toast.error(error.message);
       return;
     }
 
-    setMsg('Producto eliminado ✅');
+    toast.success('Producto eliminado');
     await load();
   };
 
+  // -----------------------------
+  // Open edit modal
+  // -----------------------------
   const openEdit = (p: Product) => {
     setEditing(p);
-    setEditName(p.name);
-    setEditDescription(p.description ?? '');
-    setEditPrice(Number(p.base_price ?? 0));
-    setEditCategoryId(p.category_id ?? '');
-    setEditIsActive(!!p.is_active);
-    setEditIsSoldOut(!!p.is_sold_out);
+    resetEdit({
+      name: p.name ?? '',
+      description: p.description ?? '',
+      base_price: Number(p.base_price ?? 0),
+      category_id: p.category_id ?? '',
+      is_active: !!p.is_active,
+      is_sold_out: !!p.is_sold_out,
+    });
+    if (editImageRef.current) editImageRef.current.value = '';
   };
 
-  const onSaveEdit = async () => {
+  // -----------------------------
+  // Save edit (RHF submit)
+  // -----------------------------
+  const onSaveEdit = submitEdit(async (values) => {
     if (!tenant?.id || !editing) return;
 
-    setLoading(true);
-    setError(null);
-    setMsg(null);
+    setBusy((p) => ({ ...p, edit: true }));
 
-    const payload = {
-      name: editName.trim(),
-      description: editDescription.trim() || null,
-      base_price: Math.max(0, Number(editPrice) || 0),
-      category_id: editCategoryId || null,
-      is_active: editIsActive,
-      is_sold_out: editIsSoldOut,
-    };
+    try {
+      const payload = {
+        name: values.name.trim(),
+        description: values.description?.trim()
+          ? values.description.trim()
+          : null,
+        base_price: Math.max(0, Number(values.base_price) || 0),
+        category_id: values.category_id ? values.category_id : null,
+        is_active: !!values.is_active,
+        is_sold_out: !!values.is_sold_out,
+      };
 
-    const { error } = await supabase
-      .from('products')
-      .update(payload)
-      .eq('id', editing.id)
-      .eq('tenant_id', tenant.id);
+      const { error } = await supabase
+        .from('products')
+        .update(payload)
+        .eq('id', editing.id)
+        .eq('tenant_id', tenant.id);
 
-    setLoading(false);
+      if (error) throw error;
 
-    if (error) return setError(error.message);
+      toast.success('Producto actualizado');
+      resetEdit(values); // marca como no dirty
+      setEditing(null);
+      await load();
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Error actualizando producto');
+    } finally {
+      setBusy((p) => ({ ...p, edit: false }));
+    }
+  });
 
-    setMsg('Producto actualizado ✅');
-    setEditing(null);
-    await load();
+  // -----------------------------
+  // Upload image in edit modal
+  // -----------------------------
+  const uploadEditImage = async (file: File) => {
+    if (!tenant?.id || !editing) return;
+
+    setBusy((p) => ({ ...p, uploadImg: true }));
+
+    try {
+      const url = await uploadProductImage(file, tenant.id, editing.id);
+      await addImageRow(tenant.id, editing.id, url);
+      toast.success('Imagen subida');
+      if (editImageRef.current) editImageRef.current.value = '';
+      await load();
+    } catch (err: any) {
+      toast.error(err?.message ?? 'Error subiendo imagen');
+    } finally {
+      setBusy((p) => ({ ...p, uploadImg: false }));
+    }
   };
 
+  // -----------------------------
+  // UI states
+  // -----------------------------
   if (tenantLoading) {
     return (
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
@@ -261,16 +389,17 @@ export function AdminProductsPage() {
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
         <h1 className="text-xl font-semibold">Productos</h1>
         <p className="mt-1 text-sm text-gray-600">
-          Crea productos y así aparecerán en tu catálogo público.
+          Crea productos y aparecerán en tu catálogo público.
         </p>
       </div>
 
+      {/* Create product */}
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
         <h2 className="text-base font-semibold">Crear producto</h2>
 
         {categories.length === 0 && (
           <div className="mt-3 rounded-xl border bg-gray-50 px-3 py-2 text-sm text-gray-700">
-            Primero crea al menos 1 categoría.
+            Primero crea al menos 1 categoría (o deja productos en “Otros”).
           </div>
         )}
 
@@ -283,10 +412,12 @@ export function AdminProductsPage() {
             <input
               className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
               placeholder="Ej: Hamburguesa Doble"
-              {...register('name')}
+              {...registerCreate('name')}
             />
-            {errors.name && (
-              <p className="text-xs text-red-600">{errors.name.message}</p>
+            {createErrors.name && (
+              <p className="text-xs text-red-600">
+                {createErrors.name.message}
+              </p>
             )}
           </div>
 
@@ -298,11 +429,11 @@ export function AdminProductsPage() {
               className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
               type="number"
               min={0}
-              {...register('base_price')}
+              {...registerCreate('base_price', { valueAsNumber: true })}
             />
-            {errors.base_price && (
+            {createErrors.base_price && (
               <p className="text-xs text-red-600">
-                {errors.base_price.message}
+                {createErrors.base_price.message}
               </p>
             )}
           </div>
@@ -313,13 +444,13 @@ export function AdminProductsPage() {
             </label>
             <textarea
               className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
-              placeholder="Ej: Hamburguesa doble con queso, papas y bebida."
               rows={3}
-              {...register('description')}
+              placeholder="Ej: Doble con queso + papas."
+              {...registerCreate('description')}
             />
-            {errors.description && (
+            {createErrors.description && (
               <p className="text-xs text-red-600">
-                {errors.description.message}
+                {createErrors.description.message}
               </p>
             )}
           </div>
@@ -330,9 +461,9 @@ export function AdminProductsPage() {
             </label>
             <select
               className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
-              disabled={categories.length === 0}
-              {...register('category_id')}
+              {...registerCreate('category_id')}
             >
+              <option value="">Sin categoría (Otros)</option>
               {categories.map((c) => (
                 <option
                   key={c.id}
@@ -342,6 +473,11 @@ export function AdminProductsPage() {
                 </option>
               ))}
             </select>
+            {createErrors.category_id && (
+              <p className="text-xs text-red-600">
+                {createErrors.category_id.message}
+              </p>
+            )}
           </div>
 
           <div className="grid gap-2">
@@ -361,58 +497,45 @@ export function AdminProductsPage() {
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
                 type="checkbox"
-                {...register('is_active')}
+                {...registerCreate('is_active')}
               />
               Activo
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
                 type="checkbox"
-                {...register('is_sold_out')}
+                {...registerCreate('is_sold_out')}
               />
               Agotado
             </label>
           </div>
 
           <div className="sm:col-span-2">
-            {error && (
-              <Alert
-                variant="error"
-                title="Error"
-                message={error}
-                onClose={() => setError(null)}
-              />
-            )}
-
-            {msg && (
-              <Alert
-                variant="success"
-                message={msg}
-                onClose={() => setMsg(null)}
-                autoCloseMs={2500}
-                className="mt-2"
-              />
-            )}
-
             <button
               type="submit"
-              disabled={isSubmitting || categories.length === 0}
+              disabled={busy.create || creatingSubmitting || !createValid}
               className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99]"
             >
-              {isSubmitting ? 'Guardando...' : 'Crear producto'}
+              {busy.create
+                ? 'Guardando...'
+                : busy.uploadImg
+                  ? 'Subiendo imagen...'
+                  : 'Crear producto'}
             </button>
           </div>
         </form>
       </div>
 
+      {/* List */}
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
         <div className="flex items-baseline justify-between">
           <h2 className="text-base font-semibold">Listado</h2>
           <button
             onClick={load}
-            className="text-sm underline underline-offset-4 text-gray-700"
+            disabled={busy.load}
+            className="text-sm underline underline-offset-4 text-gray-700 disabled:opacity-50"
           >
-            Refrescar
+            {busy.load ? 'Actualizando...' : 'Refrescar'}
           </button>
         </div>
 
@@ -425,44 +548,64 @@ export function AdminProductsPage() {
             {products.map((p) => (
               <div
                 key={p.id}
-                className="flex items-center justify-between gap-3 rounded-2xl border p-4"
+                className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border p-4"
               >
-                <div className="min-w-0">
-                  <div className="font-medium truncate">{p.name}</div>
-                  <div className="text-xs text-gray-500">
-                    ${p.base_price} · {p.is_active ? 'Activo' : 'Inactivo'}{' '}
-                    {p.is_sold_out ? '· Agotado' : ''}
+                <div className="flex items-center gap-3 min-w-0">
+                  {p.thumbUrl ? (
+                    <img
+                      src={p.thumbUrl}
+                      alt={p.name}
+                      className="h-12 w-12 rounded-xl object-cover border"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="h-12 w-12 rounded-xl border bg-gray-50 grid place-items-center text-xs text-gray-400">
+                      sin img
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <div className="font-medium truncate">{p.name}</div>
+                    <div className="text-xs text-gray-500">
+                      ${p.base_price} · {p.is_active ? 'Activo' : 'Inactivo'}{' '}
+                      {p.is_sold_out ? '· Agotado' : ''}
+                    </div>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => openEdit(p)}
-                  className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
-                >
-                  Editar
-                </button>
 
-                <Link
-                  to={`/admin/products/${p.id}/options`}
-                  className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
-                >
-                  Modificadores
-                </Link>
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <button
+                    type="button"
+                    onClick={() => openEdit(p)}
+                    className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                  >
+                    Editar
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => onDelete(p.id)}
-                  className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
-                >
-                  Eliminar
-                </button>
+                  <Link
+                    to={`/admin/products/${p.id}/options`}
+                    className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                  >
+                    Modificadores
+                  </Link>
+
+                  <button
+                    type="button"
+                    onClick={() => onDelete(p.id)}
+                    disabled={busy.delId === p.id}
+                    className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
+                  >
+                    {busy.delId === p.id ? 'Eliminando...' : 'Eliminar'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Edit modal */}
       {editing && (
-        <div className="fixed inset-0 bg-black/40 grid place-items-center p-4 z-50">
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -470,23 +613,31 @@ export function AdminProductsPage() {
                 <p className="text-xs text-gray-500">{editing.name}</p>
               </div>
               <button
+                type="button"
                 onClick={() => setEditing(null)}
-                className="rounded-xl border px-3 py-2 text-sm"
+                className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
               >
                 Cerrar
               </button>
             </div>
 
-            <div className="mt-4 grid gap-3">
+            <form
+              onSubmit={onSaveEdit}
+              className="mt-4 grid gap-3"
+            >
               <div className="grid gap-2">
                 <label className="text-sm font-medium text-gray-700">
                   Nombre
                 </label>
                 <input
                   className="rounded-xl border px-3 py-2 text-sm"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
+                  {...registerEdit('name')}
                 />
+                {editErrors.name && (
+                  <p className="text-xs text-red-600">
+                    {editErrors.name.message}
+                  </p>
+                )}
               </div>
 
               <div className="grid gap-2">
@@ -497,9 +648,13 @@ export function AdminProductsPage() {
                   type="number"
                   min={0}
                   className="rounded-xl border px-3 py-2 text-sm"
-                  value={editPrice}
-                  onChange={(e) => setEditPrice(Number(e.target.value))}
+                  {...registerEdit('base_price', { valueAsNumber: true })}
                 />
+                {editErrors.base_price && (
+                  <p className="text-xs text-red-600">
+                    {editErrors.base_price.message}
+                  </p>
+                )}
               </div>
 
               <div className="grid gap-2">
@@ -507,11 +662,15 @@ export function AdminProductsPage() {
                   Descripción
                 </label>
                 <textarea
-                  className="w-full rounded-xl border px-3 py-2 text-sm"
+                  className="rounded-xl border px-3 py-2 text-sm"
                   rows={3}
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
+                  {...registerEdit('description')}
                 />
+                {editErrors.description && (
+                  <p className="text-xs text-red-600">
+                    {editErrors.description.message}
+                  </p>
+                )}
               </div>
 
               <div className="grid gap-2">
@@ -520,8 +679,7 @@ export function AdminProductsPage() {
                 </label>
                 <select
                   className="rounded-xl border px-3 py-2 text-sm"
-                  value={editCategoryId}
-                  onChange={(e) => setEditCategoryId(e.target.value)}
+                  {...registerEdit('category_id')}
                 >
                   <option value="">Sin categoría (Otros)</option>
                   {categories.map((c) => (
@@ -535,63 +693,56 @@ export function AdminProductsPage() {
                 </select>
               </div>
 
-              <div className="grid gap-2">
-                <label className="text-sm font-medium text-gray-700">
-                  Subir imagen
-                </label>
-                <input
-                  className="rounded-xl border px-3 py-2 text-sm"
-                  type="file"
-                  accept="image/*"
-                  onChange={async (e) => {
-                    const f = e.target.files?.[0];
-                    if (!f || !tenant?.id || !editing) return;
-                    try {
-                      setLoading(true);
-                      const url = await uploadProductImage(
-                        f,
-                        tenant.id,
-                        editing.id,
-                      );
-                      await addImageRow(tenant.id, editing.id, url);
-                      setMsg('Imagen subida ✅');
-                    } catch (err: any) {
-                      setError(err.message ?? 'Error subiendo imagen');
-                    } finally {
-                      setLoading(false);
-                      await load(); // si luego cargas imágenes por producto
-                    }
-                  }}
-                />
-              </div>
-
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
-                    checked={editIsActive}
-                    onChange={(e) => setEditIsActive(e.target.checked)}
+                    {...registerEdit('is_active')}
                   />
                   Activo
                 </label>
+
                 <label className="flex items-center gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
-                    checked={editIsSoldOut}
-                    onChange={(e) => setEditIsSoldOut(e.target.checked)}
+                    {...registerEdit('is_sold_out')}
                   />
                   Agotado
                 </label>
               </div>
 
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Subir imagen
+                </label>
+                <input
+                  ref={editImageRef}
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  type="file"
+                  accept="image/*"
+                  disabled={busy.uploadImg}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (!f) return;
+                    void uploadEditImage(f);
+                  }}
+                />
+                <p className="text-xs text-gray-500">
+                  Se guardará como nueva imagen del producto (tu lógica decide
+                  cuál es principal por sort_order).
+                </p>
+              </div>
+
               <button
-                onClick={onSaveEdit}
-                disabled={loading || editName.trim().length < 2}
-                className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+                type="submit"
+                disabled={
+                  busy.edit || editSubmitting || !editValid || !editDirty
+                }
+                className="mt-2 rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-60"
               >
-                {loading ? 'Guardando...' : 'Guardar cambios'}
+                {busy.edit ? 'Guardando...' : 'Guardar cambios'}
               </button>
-            </div>
+            </form>
           </div>
         </div>
       )}
