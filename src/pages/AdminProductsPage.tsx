@@ -1,20 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useForm, type Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { toast } from 'react-toastify';
-
 import { supabase } from '../supabase/supabaseClient';
 import { useMyTenant } from '../hooks/useMyTenant';
 import { useAuth } from '../providers/AuthProviders';
-
 import { addImageRow, uploadProductImage } from '../helpers/uploadImage';
 import {
-  productCreateSchema,
-  productEditSchema,
-  type ProductCreateValues,
-  type ProductEditValues,
+  productSchema,
+  type ProductFormValues,
 } from '../schemas/product.schema';
+import { Alert } from '../ui/components/Alert';
 
 type Category = { id: string; name: string; sort_order: number };
 
@@ -34,13 +30,18 @@ type ProductRow = Product & {
   product_images?: { url: string; sort_order: number }[] | null;
 };
 
+type ProductWithThumb = Product & { thumbUrl: string | null };
+
+type ProductRow = Product & {
+  product_images?: { url: string; sort_order: number }[] | null;
+};
+
 export function AdminProductsPage() {
   const { user } = useAuth();
   const { tenant, loading: tenantLoading } = useMyTenant(user?.id);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
-  const [editing, setEditing] = useState<Product | null>(null);
 
   const [createImage, setCreateImage] = useState<File | null>(null);
 
@@ -70,66 +71,28 @@ export function AdminProductsPage() {
     productCreateSchema,
   ) as unknown as Resolver<ProductCreateValues>;
 
-  const createForm = useForm<ProductCreateValues>({
-    resolver: createResolver,
-    mode: 'onChange',
+  const form = useForm<ProductFormValues>({
+    resolver,
     defaultValues: {
-      name: '',
+      name: "",
       base_price: 0,
-      description: '',
-      category_id: '',
+      description: "",
+      category_id: "",
       is_active: true,
       is_sold_out: false,
     },
   });
 
   const {
-    register: registerCreate,
-    handleSubmit: submitCreate,
-    reset: resetCreate,
-    setValue: setCreateValue,
-    formState: {
-      errors: createErrors,
-      isSubmitting: creatingSubmitting,
-      isValid: createValid,
-    },
-  } = createForm;
+    register,
+    handleSubmit,
+    reset,
+    setValue,
+    formState: { errors, isSubmitting },
+  } = form;
 
-  // -----------------------------
-  // Edit form (RHF + Zod)
-  // -----------------------------
-  const editResolver = zodResolver(
-    productEditSchema,
-  ) as unknown as Resolver<ProductEditValues>;
+  const canUse = useMemo(() => !!tenant?.id, [tenant?.id]);
 
-  const editForm = useForm<ProductEditValues>({
-    resolver: editResolver,
-    mode: 'onChange',
-    defaultValues: {
-      name: '',
-      base_price: 0,
-      description: '',
-      category_id: '',
-      is_active: true,
-      is_sold_out: false,
-    },
-  });
-
-  const {
-    register: registerEdit,
-    handleSubmit: submitEdit,
-    reset: resetEdit,
-    formState: {
-      errors: editErrors,
-      isSubmitting: editSubmitting,
-      isValid: editValid,
-      isDirty: editDirty,
-    },
-  } = editForm;
-
-  // -----------------------------
-  // Load data
-  // -----------------------------
   const load = async () => {
     if (!tenant?.id) return;
 
@@ -137,19 +100,19 @@ export function AdminProductsPage() {
 
     const [catRes, prodRes] = await Promise.all([
       supabase
-        .from('categories')
-        .select('id,name,sort_order')
-        .eq('tenant_id', tenant.id)
-        .eq('is_active', true)
-        .order('sort_order', { ascending: true }),
+        .from("categories")
+        .select("id,name,sort_order")
+        .eq("tenant_id", tenant.id)
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true }),
 
       supabase
-        .from('products')
+        .from("products")
         .select(
-          'id,tenant_id,name,description,base_price,category_id,is_active,is_sold_out, product_images (url, sort_order)',
+          'id,name,description,base_price,category_id,is_active,is_sold_out',
         )
-        .eq('tenant_id', tenant.id)
-        .order('created_at', { ascending: false }),
+        .eq("tenant_id", tenant.id)
+        .order("created_at", { ascending: false }),
     ]);
 
     setBusy((p) => ({ ...p, load: false }));
@@ -165,27 +128,15 @@ export function AdminProductsPage() {
 
     const cats = (catRes.data as Category[]) ?? [];
     setCategories(cats);
-
-    const rows = (prodRes.data as ProductRow[]) ?? [];
-
     setProducts(
-      rows.map((p) => {
-        const imgs = (p.product_images ?? [])
-          .slice()
-          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-        const thumbUrl = imgs[0]?.url ?? null;
-
-        return {
-          ...p,
-          base_price: Number(p.base_price ?? 0),
-          thumbUrl,
-        };
-      }),
+      ((prodRes.data as Product[]) ?? []).map((p) => ({
+        ...p,
+        base_price: Number(p.base_price ?? 0),
+      })),
     );
 
-    // default de categoría (opcional): si quieres que se seleccione la primera
-    // pero dejando también "Otros" disponible:
-    if (cats[0]?.id) setCreateValue('category_id', cats[0].id);
+    // set categoría por defecto si existe
+    if (cats[0]?.id) setValue('category_id', cats[0].id);
   };
 
   useEffect(() => {
@@ -215,49 +166,38 @@ export function AdminProductsPage() {
       };
 
       const { data: inserted, error: insertErr } = await supabase
-        .from('products')
+        .from("products")
         .insert(payload)
-        .select('id')
+        .select("id")
         .single();
 
       if (insertErr) throw insertErr;
 
       // subir imagen si viene
       if (createImage && inserted?.id) {
-        setBusy((p) => ({ ...p, uploadImg: true }));
-        try {
-          const url = await uploadProductImage(
-            createImage,
-            tenant.id,
-            inserted.id,
-          );
-          await addImageRow(tenant.id, inserted.id, url);
-          toast.success('Producto creado + imagen subida');
-        } finally {
-          setBusy((p) => ({ ...p, uploadImg: false }));
-        }
-      } else {
-        toast.success('Producto creado');
+        const url = await uploadProductImage(
+          createImage,
+          tenant.id,
+          inserted.id,
+        );
+        await addImageRow(tenant.id, inserted.id, url);
+        setCreateImage(null);
+        if (createImageRef.current) createImageRef.current.value = '';
       }
 
-      // reset form
-      resetCreate({
+      reset({
         name: '',
         base_price: 0,
-        description: '',
-        category_id: categories[0]?.id ?? '',
+        description: "",
+        category_id: categories[0]?.id ?? "",
         is_active: true,
         is_sold_out: false,
       });
 
-      setCreateImage(null);
-      if (createImageRef.current) createImageRef.current.value = '';
-
+      setMsg('Producto creado ✅');
       await load();
     } catch (err: any) {
-      toast.error(err?.message ?? 'Error creando producto');
-    } finally {
-      setBusy((p) => ({ ...p, create: false }));
+      setError(err?.message ?? 'Error creando producto');
     }
   });
 
@@ -266,15 +206,15 @@ export function AdminProductsPage() {
   // -----------------------------
   const onDelete = async (id: string) => {
     if (!tenant?.id) return;
-    if (!confirm('¿Eliminar este producto?')) return;
+    if (!confirm("¿Eliminar este producto?")) return;
 
     setBusy((p) => ({ ...p, delId: id }));
 
     const { error } = await supabase
-      .from('products')
+      .from("products")
       .delete()
-      .eq('id', id)
-      .eq('tenant_id', tenant.id);
+      .eq("id", id)
+      .eq("tenant_id", tenant.id);
 
     setBusy((p) => ({ ...p, delId: null }));
 
@@ -283,7 +223,7 @@ export function AdminProductsPage() {
       return;
     }
 
-    toast.success('Producto eliminado');
+    setMsg('Producto eliminado ✅');
     await load();
   };
 
@@ -292,21 +232,15 @@ export function AdminProductsPage() {
   // -----------------------------
   const openEdit = (p: Product) => {
     setEditing(p);
-    resetEdit({
-      name: p.name ?? '',
-      description: p.description ?? '',
-      base_price: Number(p.base_price ?? 0),
-      category_id: p.category_id ?? '',
-      is_active: !!p.is_active,
-      is_sold_out: !!p.is_sold_out,
-    });
-    if (editImageRef.current) editImageRef.current.value = '';
+    setEditName(p.name);
+    setEditDescription(p.description ?? '');
+    setEditPrice(Number(p.base_price ?? 0));
+    setEditCategoryId(p.category_id ?? '');
+    setEditIsActive(!!p.is_active);
+    setEditIsSoldOut(!!p.is_sold_out);
   };
 
-  // -----------------------------
-  // Save edit (RHF submit)
-  // -----------------------------
-  const onSaveEdit = submitEdit(async (values) => {
+  const onSaveEdit = async () => {
     if (!tenant?.id || !editing) return;
 
     setBusy((p) => ({ ...p, edit: true }));
@@ -323,49 +257,21 @@ export function AdminProductsPage() {
         is_sold_out: !!values.is_sold_out,
       };
 
-      const { error } = await supabase
-        .from('products')
-        .update(payload)
-        .eq('id', editing.id)
-        .eq('tenant_id', tenant.id);
+    const { error } = await supabase
+      .from('products')
+      .update(payload)
+      .eq('id', editing.id)
+      .eq('tenant_id', tenant.id);
 
       if (error) throw error;
 
-      toast.success('Producto actualizado');
-      resetEdit(values); // marca como no dirty
-      setEditing(null);
-      await load();
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Error actualizando producto');
-    } finally {
-      setBusy((p) => ({ ...p, edit: false }));
-    }
-  });
+    if (error) return setError(error.message);
 
-  // -----------------------------
-  // Upload image in edit modal
-  // -----------------------------
-  const uploadEditImage = async (file: File) => {
-    if (!tenant?.id || !editing) return;
-
-    setBusy((p) => ({ ...p, uploadImg: true }));
-
-    try {
-      const url = await uploadProductImage(file, tenant.id, editing.id);
-      await addImageRow(tenant.id, editing.id, url);
-      toast.success('Imagen subida');
-      if (editImageRef.current) editImageRef.current.value = '';
-      await load();
-    } catch (err: any) {
-      toast.error(err?.message ?? 'Error subiendo imagen');
-    } finally {
-      setBusy((p) => ({ ...p, uploadImg: false }));
-    }
+    setMsg('Producto actualizado ✅');
+    setEditing(null);
+    await load();
   };
 
-  // -----------------------------
-  // UI states
-  // -----------------------------
   if (tenantLoading) {
     return (
       <div className="rounded-2xl border bg-white p-6 shadow-sm">
@@ -403,16 +309,13 @@ export function AdminProductsPage() {
           </div>
         )}
 
-        <form
-          onSubmit={onCreate}
-          className="mt-4 grid gap-3 sm:grid-cols-2"
-        >
+        <form onSubmit={onCreate} className="mt-4 grid gap-3 sm:grid-cols-2">
           <div className="grid gap-2">
             <label className="text-sm font-medium text-gray-700">Nombre</label>
             <input
               className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
               placeholder="Ej: Hamburguesa Doble"
-              {...registerCreate('name')}
+              {...register('name')}
             />
             {createErrors.name && (
               <p className="text-xs text-red-600">
@@ -429,7 +332,7 @@ export function AdminProductsPage() {
               className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
               type="number"
               min={0}
-              {...registerCreate('base_price', { valueAsNumber: true })}
+              {...register('base_price')}
             />
             {createErrors.base_price && (
               <p className="text-xs text-red-600">
@@ -445,8 +348,7 @@ export function AdminProductsPage() {
             <textarea
               className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
               rows={3}
-              placeholder="Ej: Doble con queso + papas."
-              {...registerCreate('description')}
+              {...register('description')}
             />
             {createErrors.description && (
               <p className="text-xs text-red-600">
@@ -461,14 +363,12 @@ export function AdminProductsPage() {
             </label>
             <select
               className="w-full rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/10 focus:border-black/30"
-              {...registerCreate('category_id')}
+              disabled={categories.length === 0}
+              {...register('category_id')}
             >
               <option value="">Sin categoría (Otros)</option>
               {categories.map((c) => (
-                <option
-                  key={c.id}
-                  value={c.id}
-                >
+                <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
@@ -497,14 +397,14 @@ export function AdminProductsPage() {
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
                 type="checkbox"
-                {...registerCreate('is_active')}
+                {...register('is_active')}
               />
               Activo
             </label>
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input
                 type="checkbox"
-                {...registerCreate('is_sold_out')}
+                {...register('is_sold_out')}
               />
               Agotado
             </label>
@@ -516,11 +416,7 @@ export function AdminProductsPage() {
               disabled={busy.create || creatingSubmitting || !createValid}
               className="rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-60 disabled:cursor-not-allowed active:scale-[0.99]"
             >
-              {busy.create
-                ? 'Guardando...'
-                : busy.uploadImg
-                  ? 'Subiendo imagen...'
-                  : 'Crear producto'}
+              {isSubmitting ? 'Guardando...' : 'Crear producto'}
             </button>
           </div>
         </form>
@@ -535,7 +431,7 @@ export function AdminProductsPage() {
             disabled={busy.load}
             className="text-sm underline underline-offset-4 text-gray-700 disabled:opacity-50"
           >
-            {busy.load ? 'Actualizando...' : 'Refrescar'}
+            Refrescar
           </button>
         </div>
 
@@ -550,36 +446,20 @@ export function AdminProductsPage() {
                 key={p.id}
                 className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border p-4"
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  {p.thumbUrl ? (
-                    <img
-                      src={p.thumbUrl}
-                      alt={p.name}
-                      className="h-12 w-12 rounded-xl object-cover border"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="h-12 w-12 rounded-xl border bg-gray-50 grid place-items-center text-xs text-gray-400">
-                      sin img
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <div className="font-medium truncate">{p.name}</div>
-                    <div className="text-xs text-gray-500">
-                      ${p.base_price} · {p.is_active ? 'Activo' : 'Inactivo'}{' '}
-                      {p.is_sold_out ? '· Agotado' : ''}
-                    </div>
+                <div className="min-w-0">
+                  <div className="font-medium truncate">{p.name}</div>
+                  <div className="text-xs text-gray-500">
+                    ${p.base_price} · {p.is_active ? 'Activo' : 'Inactivo'}{' '}
+                    {p.is_sold_out ? '· Agotado' : ''}
                   </div>
                 </div>
-
-                <div className="flex items-center gap-2 flex-wrap justify-end">
-                  <button
-                    type="button"
-                    onClick={() => openEdit(p)}
-                    className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
-                  >
-                    Editar
-                  </button>
+                <button
+                  type="button"
+                  onClick={() => openEdit(p)}
+                  className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+                >
+                  Editar
+                </button>
 
                   <Link
                     to={`/admin/products/${p.id}/options`}
@@ -588,15 +468,13 @@ export function AdminProductsPage() {
                     Modificadores
                   </Link>
 
-                  <button
-                    type="button"
-                    onClick={() => onDelete(p.id)}
-                    disabled={busy.delId === p.id}
-                    className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]"
-                  >
-                    {busy.delId === p.id ? 'Eliminando...' : 'Eliminar'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => onDelete(p.id)}
+                  className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50 active:scale-[0.99]"
+                >
+                  Eliminar
+                </button>
               </div>
             ))}
           </div>
@@ -621,17 +499,15 @@ export function AdminProductsPage() {
               </button>
             </div>
 
-            <form
-              onSubmit={onSaveEdit}
-              className="mt-4 grid gap-3"
-            >
+            <div className="mt-4 grid gap-3">
               <div className="grid gap-2">
                 <label className="text-sm font-medium text-gray-700">
                   Nombre
                 </label>
                 <input
                   className="rounded-xl border px-3 py-2 text-sm"
-                  {...registerEdit('name')}
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
                 />
                 {editErrors.name && (
                   <p className="text-xs text-red-600">
@@ -648,7 +524,8 @@ export function AdminProductsPage() {
                   type="number"
                   min={0}
                   className="rounded-xl border px-3 py-2 text-sm"
-                  {...registerEdit('base_price', { valueAsNumber: true })}
+                  value={editPrice}
+                  onChange={(e) => setEditPrice(Number(e.target.value))}
                 />
                 {editErrors.base_price && (
                   <p className="text-xs text-red-600">
@@ -664,7 +541,8 @@ export function AdminProductsPage() {
                 <textarea
                   className="rounded-xl border px-3 py-2 text-sm"
                   rows={3}
-                  {...registerEdit('description')}
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
                 />
                 {editErrors.description && (
                   <p className="text-xs text-red-600">
@@ -679,33 +557,62 @@ export function AdminProductsPage() {
                 </label>
                 <select
                   className="rounded-xl border px-3 py-2 text-sm"
-                  {...registerEdit('category_id')}
+                  value={editCategoryId}
+                  onChange={(e) => setEditCategoryId(e.target.value)}
                 >
                   <option value="">Sin categoría (Otros)</option>
                   {categories.map((c) => (
-                    <option
-                      key={c.id}
-                      value={c.id}
-                    >
+                    <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
                   ))}
                 </select>
               </div>
 
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Subir imagen
+                </label>
+                <input
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  type="file"
+                  accept="image/*"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    if (!f || !tenant?.id || !editing) return;
+                    try {
+                      setLoading(true);
+                      const url = await uploadProductImage(
+                        f,
+                        tenant.id,
+                        editing.id,
+                      );
+                      await addImageRow(tenant.id, editing.id, url);
+                      setMsg('Imagen subida ✅');
+                    } catch (err: any) {
+                      setError(err.message ?? 'Error subiendo imagen');
+                    } finally {
+                      setLoading(false);
+                      await load(); // si luego cargas imágenes por producto
+                    }
+                  }}
+                />
+              </div>
+
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
-                    {...registerEdit('is_active')}
+                    checked={editIsActive}
+                    onChange={(e) => setEditIsActive(e.target.checked)}
                   />
                   Activo
                 </label>
-
                 <label className="flex items-center gap-2 text-sm text-gray-700">
                   <input
                     type="checkbox"
-                    {...registerEdit('is_sold_out')}
+                    checked={editIsSoldOut}
+                    onChange={(e) => setEditIsSoldOut(e.target.checked)}
                   />
                   Agotado
                 </label>
@@ -740,7 +647,7 @@ export function AdminProductsPage() {
                 }
                 className="mt-2 rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-black/90 disabled:opacity-60"
               >
-                {busy.edit ? 'Guardando...' : 'Guardar cambios'}
+                {loading ? 'Guardando...' : 'Guardar cambios'}
               </button>
             </form>
           </div>
